@@ -29,6 +29,12 @@ import numpy as np
 import scipy.interpolate
 from scipy.stats import norm
 
+# healpy imports for extended llh
+import healpy as hp
+
+# my analysis tools imports
+import anapymods.healpy as amp_hp
+
 # local package imports
 from . import set_pars
 from .utils import kernel_func
@@ -289,7 +295,7 @@ class ClassicLLH(NullModel):
         Parameters
         -----------
         ev : structured array
-            Event array, importand information *sinDec* for this calculation
+            Event array, important information *sinDec* for this calculation
 
         Returns
         --------
@@ -871,5 +877,145 @@ class EnergyLLHfixed(EnergyLLH):
         print("EnergyLLH with FIXED splines used here, call has no effect")
 
         return
+
+
+##############################################################################
+## New Stacking Classic LLH Model
+##############################################################################
+class StackingExtendedClassicLLH(ClassicLLH):
+    r"""
+    Extending the ClassicLLH model to be able to use stacking and handle
+    and handle extended sources.
+
+    The signal pdf gets modified according to the stacking ansatz described in
+    `Astr.Phys.J. 636:680-684, 2006 <http://arxiv.org/abs/astro-ph/0507120>`_.
+
+    Extended sources can be described by a gaussian hypothesis giving a source
+    sigma which is folded with the signal gaussian.
+    Or a healpy llh landscape can be given, which gets folded with the event
+    sigma to create a combined directional pdf for each event.
+    """
+
+
+    def __init__(self, *args, **kwargs):
+        r"""Set some additional variables like the src list and theoretical
+        weight per src used in the stacking LLH.
+
+        Pass the rest to ClassicLLH as it is identical.
+        """
+        super(StackingExtendedClassicLLH, self).__init__(*args, **kwargs)
+
+        return
+
+
+    def signal(self, src, ev):
+        r"""Spatial probability of event i coming from extended source j.
+
+        This is the modified ClassicLLH spatial signal term.
+        Here we can use multiple source poisitions and also using extended
+        source hypotheses.
+        Event distribution is still assumed to be approcimated by a gaussian.
+
+        4 Cases are possible for the src["sigma"] field:
+
+        1. Only 1 src given, float sigma:
+           Use ClassicLLH signal pdf with concolved sig = sig^2 + sig_src^2.
+
+        2. Only 1 src given, healpy sigma:
+           Return signal pdf from healpy map convolved with event sigma using
+           the healpy.sphtfunc.smoothing() function.
+
+        3. Multiple srcs, float sigmas:
+           Use stacked LLH in combination with case 1.
+
+        4. Multiple srcs, healpy sigmas:
+           Use stacked LLH in combination with case 2.
+
+        Parameters
+        -----------
+        ev : structured array
+             Event array, import information: sinDec, ra, sigma
+
+        src: structured array
+             Containing information about n point sources which shall be used
+             in the hypothesis.
+             Fields are 'ra', 'dec', 'sigma', all in radians and 'weight' which
+             is the sources theoretical weight.
+             Each entry is describing one source Sj.
+             If each field only contains one entry, this is equal to the
+             non-stacking single source case from ClassicLLH.
+
+            Note: src['sigma'] can contain floats or healpy maps.
+                  In case of floats, the normal signal pdf is convolved with
+                  a gaussian of width src_sigma.
+                  If it contains a healpy map, this map is convolved with each
+                  event gaussian and used as the spatial pdf, thus using the
+                  complete information from directional reconstruction.
+
+        Returns
+        --------
+        P : array-like
+            Spatial signal probability for each event
+        """
+        # Sanity checks and determine use case
+        try:
+            type(src).__module__ == np.__name__
+        except:
+            raise TypeError("src is not of type 'numpy'.")
+        # Check for all four possible cases of giving src information
+        n_ev = ev["sigma"]
+        n_src = len(src["sigma"])
+        hp_map_info = map(src["sigma"], hp.mapinfo)
+        # sigmas may only be floats or healpy maps
+        if np.any(hp_map_info) == -1 and np.any(hp_map_info) == 0:
+            raise TypeError(
+                "Mixed float sigmas and llh maps in sigma. Aborting.")
+
+        # Create signal array storing the signal value for every event
+        sig = np.zeros(n_ev)
+        weight_sum = 0
+
+        # Get src detector weight from BG spline -> Detector exposition
+        # for every src position.
+        # background expects recarray with field 'sinDec' so create it first
+        src_sin_dec = np.zeros((len(src), ), dtype=[("sinDec", float)])
+        src_sin_dec["sinDec"] = np.sin(src["dec"])
+        src_dec_w = self.background(src_sin_dec)
+
+        # Normalize weights: Total = Acceptance * Theoretical Weight
+        norm_w = src_dec_w * src["weight"]
+        norm_w = norm_w / np.sum(norm_w)
+
+###################################################
+# TODO: Implement HEalpy sigma and test stuff in notebook
+###################################################
+
+        # Case 2 or 4: We use healpy llh maps as source signal pdf
+        if np.all(hp_map_info) == 0:
+            # Loop over every given src position
+            for i, srci in enumerate(src):
+                print("healpy case src {} ".format(i))
+                pass
+
+        # Case 1 or 3: We use gaussian approximation as source signal pdf
+        if np.all(hp_map_info) == -1:
+            # Use normal ClassicLLH signal pdf with extended sigma
+            classic_sig = super(StackingExtendedClassicLLH, self).signal
+            # Loop over every given src position
+            for i, srci in enumerate(src):
+                print("float case src {}".format(i))
+                # Convolve gaussians by adding sigmas squared
+                ev["sigma"] = np.sqrt(ev["sigma"]**2 + srci["sigma"]**2)
+                # Stacking: For every source add signal weighted by detector
+                # src_dec_w and by the srcs intrinsic theoretical weight src_w
+                sig += norm_w[i] * classic_sig(srci["ra"], srci["dec"], ev)
+
+        else:
+            raise TypeError(
+                "src['sigma'] doesn't math any of the four conditions")
+
+        return sig
+
+
 
 

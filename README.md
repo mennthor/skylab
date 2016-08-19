@@ -12,3 +12,6 @@ search. All the magic happens within the framework of *numpy*, *scipy*, and
 
 http://github.com/coenders/skylab
 
+## Modifications
+
+Modified to include stacking of extended sources.

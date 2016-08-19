@@ -1,3 +1,7 @@
 # Compiled Sources #
 *.py[ocd]
 *.swp
+
+# OSX files
+.DS_Store
+._.DS_Store
