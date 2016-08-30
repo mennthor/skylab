@@ -880,7 +880,7 @@ class EnergyLLHfixed(EnergyLLH):
 
 
 ##############################################################################
-## New Stacking Classic LLH Model
+## NEW Stacking Extended Classic LLH Model
 ##############################################################################
 class StackingExtendedClassicLLH(ClassicLLH):
     r"""
@@ -987,7 +987,7 @@ class StackingExtendedClassicLLH(ClassicLLH):
         norm_w = norm_w / np.sum(norm_w)
 
 ###################################################
-# TODO: Implement HEalpy sigma and test stuff in notebook
+# TODO: Implement Healpy sigma and test stuff in notebook
 ###################################################
 
         # Case 2 or 4: We use healpy llh maps as source signal pdf
@@ -995,6 +995,16 @@ class StackingExtendedClassicLLH(ClassicLLH):
             # Loop over every given src position
             for i, srci in enumerate(src):
                 print("healpy case src {} ".format(i))
+                # Smooth llh map of src i with event sigma to get convolved pdf
+                conv_map = hp.smoothing(srci["sigma"], sigma=ev["sigma"])
+                # 1. Convolve map with every signal sigma
+                #    -> Maybe do once at startup and cache maps, otherwise
+                #       might be extremely slow
+                #    -> Also maps could be added with appropriate weights
+                #       because signal is added for every src anyway
+                # 2. Get the pdf value from the convolved (added) map(s) for
+                #    for every event
+                #    -> Add pdf values for every src per event like below
                 pass
 
         # Case 1 or 3: We use gaussian approximation as source signal pdf
