@@ -996,7 +996,9 @@ class StackingExtendedClassicLLH(ClassicLLH):
             for i, srci in enumerate(src):
                 print("healpy case src {} ".format(i))
                 # Smooth llh map of src i with event sigma to get convolved pdf
-                conv_map = hp.smoothing(srci["sigma"], sigma=ev["sigma"])
+                conv_mapsi = np.array(
+                    [hp.smoothing(srci["sigma"], sigma=sig, verbose=False)
+                     for sig in ev["sigma"]])
                 # 1. Convolve map with every signal sigma
                 #    -> Maybe do once at startup and cache maps, otherwise
                 #       might be extremely slow
