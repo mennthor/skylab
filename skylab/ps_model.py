@@ -936,7 +936,7 @@ class StackingExtendedClassicLLH(ClassicLLH):
         ev : structured array
              Event array, import information: sinDec, ra, sigma
 
-        src: structured array
+        src: dict
              Containing information about n point sources which shall be used
              in the hypothesis.
              Fields are 'ra', 'dec', 'sigma', all in radians and 'weight' which
@@ -958,27 +958,35 @@ class StackingExtendedClassicLLH(ClassicLLH):
             Spatial signal probability for each event
         """
         # Sanity checks and determine use case
-        try:
-            type(src).__module__ == np.__name__
-        except:
-            raise TypeError("src is not of type 'numpy'.")
+        if not isinstance(src, dict):
+            raise TypeError("src is no dictionary.")
         # Check for all four possible cases of giving src information
-        n_ev = ev["sigma"]
-        n_src = len(src["sigma"])
-        hp_map_info = map(src["sigma"], hp.mapinfo)
+        n_ev = len(ev["ra"])
+        n_src = len(src["ra"])
+        hp_map_type = np.zeros(n_src) - 1
+        for i, sigmai in enumerate(src["sigma"]):
+            try:
+                print(hp.maptype(srci["sigma"]))
+                hp_map_type[i] = hp.maptype(srci["sigma"])
+            except TypeError as e:
+                # Do nothing, because invalid maps return -1 as initialized
+                pass
+
+        print(hp_map_type)
+
         # sigmas may only be floats or healpy maps
-        if np.any(hp_map_info) == -1 and np.any(hp_map_info) == 0:
+        if np.any(hp_map_type == -1) and np.any(hp_map_type != -1):
             raise TypeError(
-                "Mixed float sigmas and llh maps in sigma. Aborting.")
+                "Mixed float sigmas and llh maps in sigma field. Aborting.")
 
         # Create signal array storing the signal value for every event
         sig = np.zeros(n_ev)
-        weight_sum = 0
 
         # Get src detector weight from BG spline -> Detector exposition
         # for every src position.
         # background expects recarray with field 'sinDec' so create it first
-        src_sin_dec = np.zeros((len(src), ), dtype=[("sinDec", float)])
+        src_sin_dec = np.zeros((n_src, ), dtype=[("sinDec", float)])
+
         src_sin_dec["sinDec"] = np.sin(src["dec"])
         src_dec_w = self.background(src_sin_dec)
 
@@ -991,40 +999,54 @@ class StackingExtendedClassicLLH(ClassicLLH):
 ###################################################
 
         # Case 2 or 4: We use healpy llh maps as source signal pdf
-        if np.all(hp_map_info) == 0:
+        if np.all(hp_map_type == 0):
+            print("StackingExtendedClassicLLH: Healpy Case")
+            # Get pixel index for every event
+            NPIX = len(src["sigma"][0])
+            NSIDE = hp.npix2nside(NPIX)
+            pixind = hp.ang2pix(NSIDE, ev["dec"], ev["ra"])
+            print("Lenght of pixind = ", len(pixind))
+            print("Lenght of num ev = ", n_ev)
             # Loop over every given src position
             for i, srci in enumerate(src):
-                print("healpy case src {} ".format(i))
-                # Smooth llh map of src i with event sigma to get convolved pdf
-                conv_mapsi = np.array(
-                    [hp.smoothing(srci["sigma"], sigma=sig, verbose=False)
-                     for sig in ev["sigma"]])
-                # 1. Convolve map with every signal sigma
-                #    -> Maybe do once at startup and cache maps, otherwise
-                #       might be extremely slow
-                #    -> Also maps could be added with appropriate weights
-                #       because signal is added for every src anyway
-                # 2. Get the pdf value from the convolved (added) map(s) for
-                #    for every event
-                #    -> Add pdf values for every src per event like below
-                pass
+                print("  lookingh at src {} ".format(i))
+                if False:
+                    # Smooth llh map of src i with event sigma to get convolved pdf
+                    conv_mapsi = np.array(
+                        [hp.smoothing(srci["sigma"], sigma=sig, verbose=False)
+                         for sig in ev["sigma"]])
+                    # 1. Convolve map with every signal sigma
+                    #    -> Maybe do once at startup and cache maps, otherwise
+                    #       might be extremely slow
+                    #    -> Also maps could be added with appropriate weights
+                    #       because signal is added for every src anyway
+                    # 2. Get the pdf value from the convolved (added) map(s) for
+                    #    for every event
+                    #    -> Add pdf values for every src per event like below
 
         # Case 1 or 3: We use gaussian approximation as source signal pdf
-        if np.all(hp_map_info) == -1:
+        if np.all(hp_map_type == -1):
+            print("StackingExtendedClassicLLH: Float Case")
             # Use normal ClassicLLH signal pdf with extended sigma
             classic_sig = super(StackingExtendedClassicLLH, self).signal
             # Loop over every given src position
             for i, srci in enumerate(src):
-                print("float case src {}".format(i))
+                # Print src info
+                temp = "src {src:d} : ra={ra:.3f}, dec={dec:.3f}," \
+                       " sigma={sigma:.3f}, w={w:.3f}"
+                context = {"src" : i, "ra" : srci["ra"], "dec" : srci["dec"],
+                           "sigma" : srci["sigma"], "w" : srci["weight"]}
+                print(temp.format(**context))
                 # Convolve gaussians by adding sigmas squared
                 ev["sigma"] = np.sqrt(ev["sigma"]**2 + srci["sigma"]**2)
                 # Stacking: For every source add signal weighted by detector
                 # src_dec_w and by the srcs intrinsic theoretical weight src_w
-                sig += norm_w[i] * classic_sig(srci["ra"], srci["dec"], ev)
+                classic_sig = classic_sig(src_ra=srci["ra"], src_dec=srci["dec"], ev=ev)
+                sig = sig + norm_w[i] * classic_sig
 
         else:
             raise TypeError(
-                "src['sigma'] doesn't math any of the four conditions")
+                "src['sigma'] doesn't match any of the four conditions")
 
         return sig
 

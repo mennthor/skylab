@@ -285,18 +285,18 @@ class PointSourceLLH(object):
             exp = RS.choice(exp, size=mu)
 
         # store exp data, add sinDec information if not available
+        if not "sinDec" in exp.dtype.names:
+            exp = np.lib.recfunctions.append_fields(
+                exp, "sinDec", np.sin(exp["dec"]),
+                dtypes=np.float, usemask=False)
+        if not "sinDec" in mc.dtype.names:
+            mc = np.lib.recfunctions.append_fields(
+                mc, "sinDec", np.sin(mc["dec"]),
+                dtypes=np.float, usemask=False)
+
+        # Experimental data values, put self.exp here, because append_fields
+        # doesn't work with self class variables
         self.exp = exp
-
-        if not "sinDec" in self.exp.dtype.fields:
-            self.exp = numpy.lib.recfunctions.append_fields(
-                    self.exp, "sinDec", np.sin(self.exp["dec"]),
-                    dtypes=np.float, usemask=False)
-        if not "sinDec" in mc.dtype.fields:
-            mc = numpy.lib.recfunctions.append_fields(
-                    mc, "sinDec", np.sin(mc["dec"]),
-                    dtypes=np.float, usemask=False)
-
-        # Experimental data values
         self.livetime = livetime
 
         # set llh model
