@@ -294,8 +294,7 @@ class PointSourceLLH(object):
                 mc, "sinDec", np.sin(mc["dec"]),
                 dtypes=np.float, usemask=False)
 
-        # Experimental data values, put self.exp here, because append_fields
-        # doesn't work with self class variables
+        # Experimental data values
         self.exp = exp
         self.livetime = livetime
 

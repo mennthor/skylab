@@ -966,13 +966,10 @@ class StackingExtendedClassicLLH(ClassicLLH):
         hp_map_type = np.zeros(n_src) - 1
         for i, sigmai in enumerate(src["sigma"]):
             try:
-                print(hp.maptype(srci["sigma"]))
-                hp_map_type[i] = hp.maptype(srci["sigma"])
+                hp_map_type[i] = hp.maptype(sigmai)
             except TypeError as e:
                 # Do nothing, because invalid maps return -1 as initialized
                 pass
-
-        print(hp_map_type)
 
         # sigmas may only be floats or healpy maps
         if np.any(hp_map_type == -1) and np.any(hp_map_type != -1):
@@ -1030,19 +1027,24 @@ class StackingExtendedClassicLLH(ClassicLLH):
             # Use normal ClassicLLH signal pdf with extended sigma
             classic_sig = super(StackingExtendedClassicLLH, self).signal
             # Loop over every given src position
-            for i, srci in enumerate(src):
+            for i in range(n_src):
                 # Print src info
                 temp = "src {src:d} : ra={ra:.3f}, dec={dec:.3f}," \
                        " sigma={sigma:.3f}, w={w:.3f}"
-                context = {"src" : i, "ra" : srci["ra"], "dec" : srci["dec"],
-                           "sigma" : srci["sigma"], "w" : srci["weight"]}
+                context = {
+                    "src" : i,
+                    "ra" : src["ra"][i],
+                    "dec" : src["dec"][i],
+                    "sigma" : src["sigma"][i],
+                    "w" : src["weight"][i],
+                    }
                 print(temp.format(**context))
                 # Convolve gaussians by adding sigmas squared
-                ev["sigma"] = np.sqrt(ev["sigma"]**2 + srci["sigma"]**2)
+                ev["sigma"] = np.sqrt(ev["sigma"]**2 + src["sigma"][i]**2)
                 # Stacking: For every source add signal weighted by detector
                 # src_dec_w and by the srcs intrinsic theoretical weight src_w
-                classic_sig = classic_sig(src_ra=srci["ra"], src_dec=srci["dec"], ev=ev)
-                sig = sig + norm_w[i] * classic_sig
+                sig = sig + norm_w[i] * classic_sig(
+                    src_ra=src["ra"][i], src_dec=src["dec"][i], ev=ev)
 
         else:
             raise TypeError(
