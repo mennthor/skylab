@@ -1020,40 +1020,19 @@ class StackingExtendedClassicLLH(ClassicLLH):
             pixind = hp.ang2pix(NSIDE, th, phi)
             # Add weighted maps, then no loop is required
             w = norm_w.reshape(n_src, 1)
-            # Multiply each map with its weight
-            added_maps = np.sum(src["sigma"] * w, axis=0)
-            hp.mollview(amp_hp.norm_healpy_map(added_maps)[0])
-            # Convolve map with event sigma and norm to pdf
+            added_map = np.sum(src["sigma"] * w, axis=0)
+            # Convolve map with every event sigma and norm to pdf
             # This can take time
+            print("# Start convolving ...")
             convolved_maps = np.array(
                 [amp_hp.norm_healpy_map(
                     hp.smoothing(
-                        src["sigma"][i], sigma=sigma_evi, verbose=False)
+                        added_map, sigma=sigma_evi, verbose=False)
                     )[0] for sigma_evi in ev["sigma"]])
             # For every src location get the correct pdf signal value
             # Because the src maps were added with the weight before this
             # already is the stacked llh value for the signal
-            sig = conv_mapsi[:, pixind]
-            if False:
-                # Loop over every given src position
-                for i in range(n_src):
-                    print("  looking at src {} ".format(i))
-                    # Smooth llh map of src i with event sigma to get
-                    # convolved pdf
-                    conv_mapsi = np.array(
-                        [hp.smoothing(
-                            src["sigma"][i],
-                            sigma=sigma_evi,
-                            verbose=False
-                            )
-                         for sigma_evi in ev["sigma"]])
-                    # Make pdf from maps
-                    for i, mapi in enumerate(conv_mapsi):
-                        conv_mapsi[i], _ = norm_healpy_map(mapi)
-                    pdf_vals = conv_mapsi[:, pixind]
-                    # Stacking: For every source add signal weighted by detector
-                    # src_dec_w and by the srcs intrinsic theoretical weight src_w
-                    sig = sig + norm_w[i] * pdf_vals
+            sig = convolved_maps[:, pixind]
         # Case 1 or 3: We use gaussian approximation as source signal pdf
         elif np.all(hp_map_type == -1):
             print("StackingExtendedClassicLLH: Float Case")
