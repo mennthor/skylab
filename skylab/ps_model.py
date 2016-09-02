@@ -882,6 +882,24 @@ class EnergyLLHfixed(EnergyLLH):
 ##############################################################################
 ## NEW Stacking Extended Classic LLH Model
 ##############################################################################
+# Healpy coordinate converter
+def _ThetaPhiToDecRa(th, phi):
+    """
+    Go from healpy coordinates to ra, dec.
+    http://stackoverflow.com/questions/29702010/healpy-pix2ang-
+    convert-from-healpix-index-to-ra-dec-or-glong-glat
+    """
+    # Same definition as in psLLH allsky-scan (not using ra = 2*np.pi - phi)
+    return np.pi / 2. - th, phi
+def _DecRaToThetaPhi(dec, ra):
+    """
+    Go from ra, dec to healpy coordinates theta, phi.
+    http://stackoverflow.com/questions/29702010/healpy-pix2ang-
+    convert-from-healpix-index-to-ra-dec-or-glong-glat
+    """
+    # Same definition as in psLLH allsky-scan (not using phi = 2*np.pi - ra)
+    return np.pi / 2. - dec, ra
+
 class StackingExtendedClassicLLH(ClassicLLH):
     r"""
     Extending the ClassicLLH model to be able to use stacking and handle
@@ -968,7 +986,7 @@ class StackingExtendedClassicLLH(ClassicLLH):
             try:
                 hp_map_type[i] = hp.maptype(sigmai)
             except TypeError as e:
-                # Do nothing, because invalid maps return -1 as initialized
+                # Just pass, because invalid maps return -1 as initialized
                 pass
 
         # sigmas may only be floats or healpy maps
@@ -976,24 +994,19 @@ class StackingExtendedClassicLLH(ClassicLLH):
             raise TypeError(
                 "Mixed float sigmas and llh maps in sigma field. Aborting.")
 
-        # Create signal array storing the signal value for every event
-        sig = np.zeros(n_ev)
-
         # Get src detector weight from BG spline -> Detector exposition
-        # for every src position.
-        # background expects recarray with field 'sinDec' so create it first
+        # for every src position. background expects recarray with field
+        # 'sinDec' so create it first
         src_sin_dec = np.zeros((n_src, ), dtype=[("sinDec", float)])
-
         src_sin_dec["sinDec"] = np.sin(src["dec"])
         src_dec_w = self.background(src_sin_dec)
 
-        # Normalize weights: Total = Acceptance * Theoretical Weight
+        # Normalize weights: Total = Acceptance * Theoretical Weight / Sum
         norm_w = src_dec_w * src["weight"]
         norm_w = norm_w / np.sum(norm_w)
 
-###################################################
-# TODO: Implement Healpy sigma and test stuff in notebook
-###################################################
+        # Create signal array storing the signal value for every event
+        sig = np.zeros(n_ev) - 1.
 
         # Case 2 or 4: We use healpy llh maps as source signal pdf
         if np.all(hp_map_type == 0):
@@ -1001,51 +1014,70 @@ class StackingExtendedClassicLLH(ClassicLLH):
             # Get pixel index for every event
             NPIX = len(src["sigma"][0])
             NSIDE = hp.npix2nside(NPIX)
-            pixind = hp.ang2pix(NSIDE, ev["dec"], ev["ra"])
-            print("Lenght of pixind = ", len(pixind))
-            print("Lenght of num ev = ", n_ev)
-            # Loop over every given src position
-            for i, srci in enumerate(src):
-                print("  lookingh at src {} ".format(i))
-                if False:
-                    # Smooth llh map of src i with event sigma to get convolved pdf
+            # Shift dec [-pi/2, pi/2] to healpy theta [0, pi], so that
+            # dec -pi/2 -> theta pi and dec pi/2 -> theta 0
+            th, phi = _DecRaToThetaPhi(ev["dec"], ev["ra"])
+            pixind = hp.ang2pix(NSIDE, th, phi)
+            # Add weighted maps, then no loop is required
+            w = norm_w.reshape(n_src, 1)
+            # Multiply each map with its weight
+            added_maps = np.sum(src["sigma"] * w, axis=0)
+            hp.mollview(amp_hp.norm_healpy_map(added_maps)[0])
+            # Convolve map with event sigma and norm to pdf
+            # This can take time
+            convolved_maps = np.array(
+                [amp_hp.norm_healpy_map(
+                    hp.smoothing(
+                        src["sigma"][i], sigma=sigma_evi, verbose=False)
+                    )[0] for sigma_evi in ev["sigma"]])
+            # For every src location get the correct pdf signal value
+            # Because the src maps were added with the weight before this
+            # already is the stacked llh value for the signal
+            sig = conv_mapsi[:, pixind]
+            if False:
+                # Loop over every given src position
+                for i in range(n_src):
+                    print("  looking at src {} ".format(i))
+                    # Smooth llh map of src i with event sigma to get
+                    # convolved pdf
                     conv_mapsi = np.array(
-                        [hp.smoothing(srci["sigma"], sigma=sig, verbose=False)
-                         for sig in ev["sigma"]])
-                    # 1. Convolve map with every signal sigma
-                    #    -> Maybe do once at startup and cache maps, otherwise
-                    #       might be extremely slow
-                    #    -> Also maps could be added with appropriate weights
-                    #       because signal is added for every src anyway
-                    # 2. Get the pdf value from the convolved (added) map(s) for
-                    #    for every event
-                    #    -> Add pdf values for every src per event like below
-
+                        [hp.smoothing(
+                            src["sigma"][i],
+                            sigma=sigma_evi,
+                            verbose=False
+                            )
+                         for sigma_evi in ev["sigma"]])
+                    # Make pdf from maps
+                    for i, mapi in enumerate(conv_mapsi):
+                        conv_mapsi[i], _ = norm_healpy_map(mapi)
+                    pdf_vals = conv_mapsi[:, pixind]
+                    # Stacking: For every source add signal weighted by detector
+                    # src_dec_w and by the srcs intrinsic theoretical weight src_w
+                    sig = sig + norm_w[i] * pdf_vals
         # Case 1 or 3: We use gaussian approximation as source signal pdf
-        if np.all(hp_map_type == -1):
+        elif np.all(hp_map_type == -1):
             print("StackingExtendedClassicLLH: Float Case")
             # Use normal ClassicLLH signal pdf with extended sigma
             classic_sig = super(StackingExtendedClassicLLH, self).signal
             # Loop over every given src position
             for i in range(n_src):
                 # Print src info
-                temp = "src {src:d} : ra={ra:.3f}, dec={dec:.3f}," \
-                       " sigma={sigma:.3f}, w={w:.3f}"
-                context = {
-                    "src" : i,
-                    "ra" : src["ra"][i],
-                    "dec" : src["dec"][i],
-                    "sigma" : src["sigma"][i],
-                    "w" : src["weight"][i],
-                    }
-                print(temp.format(**context))
+                # temp = "src {src:d} : ra={ra:.3f}, dec={dec:.3f}," \
+                #        " sigma={sigma:.3f}, w={w:.3f}"
+                # context = {
+                #     "src" : i,
+                #     "ra" : src["ra"][i],
+                #     "dec" : src["dec"][i],
+                #     "sigma" : src["sigma"][i],
+                #     "w" : src["weight"][i],
+                #     }
+                # print(temp.format(**context))
                 # Convolve gaussians by adding sigmas squared
                 ev["sigma"] = np.sqrt(ev["sigma"]**2 + src["sigma"][i]**2)
                 # Stacking: For every source add signal weighted by detector
                 # src_dec_w and by the srcs intrinsic theoretical weight src_w
                 sig = sig + norm_w[i] * classic_sig(
                     src_ra=src["ra"][i], src_dec=src["dec"][i], ev=ev)
-
         else:
             raise TypeError(
                 "src['sigma'] doesn't match any of the four conditions")
