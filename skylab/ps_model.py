@@ -29,10 +29,9 @@ import numpy as np
 import scipy.interpolate
 from scipy.stats import norm
 
-# healpy imports for extended llh
+# New imports for StackingExtendedLLH
 import healpy as hp
-
-# my analysis tools imports
+# My analysis tools
 import anapymods.healpy as amp_hp
 
 # local package imports
@@ -70,6 +69,9 @@ _precision = 0.1
 _par_val = np.nan
 _parab_cache = np.zeros((0, ), dtype=[("S1", np.float), ("a", np.float),
                                       ("b", np.float)])
+
+
+_cached_llh_maps = None
 
 
 class NullModel(object):
@@ -880,12 +882,12 @@ class EnergyLLHfixed(EnergyLLH):
 
 
 ##############################################################################
-## NEW Stacking Extended Classic LLH Model
+## NEW Stacking Extended LLH Model
 ##############################################################################
-class StackingExtendedClassicLLH(ClassicLLH):
+class StackingExtendedLLH(ClassicLLH):
     r"""
     Extending the ClassicLLH model to be able to use stacking and handle
-    and handle extended sources.
+    extended sources.
 
     The signal pdf gets modified according to the stacking ansatz described in
     `Astr.Phys.J. 636:680-684, 2006 <http://arxiv.org/abs/astro-ph/0507120>`_.
@@ -895,16 +897,31 @@ class StackingExtendedClassicLLH(ClassicLLH):
     Or a healpy llh landscape can be given, which gets folded with the event
     sigma to create a combined directional pdf for each event.
     """
-
+    # Default values for psLLH class. Can be overwritten in constructor
+    # by setting the attribute as keyword argument
+    _cached_llh_maps = _cached_llh_maps
 
     def __init__(self, *args, **kwargs):
-        r"""Set some additional variables like the src list and theoretical
-        weight per src used in the stacking LLH.
-
-        Pass the rest to ClassicLLH as it is identical.
+        r"""
+        Pass init to ClassicLLH as it is identical.
         """
-        super(StackingExtendedClassicLLH, self).__init__(*args, **kwargs)
+        super(StackingExtendedLLH, self).__init__(*args, **kwargs)
 
+        return
+
+
+    # Getter/Setter for cached llh maps. Every event smoothes the signal map
+    # which takes a long time, but doesn't change per event.
+    # So values get cached in ps_llh.StackingExtendedLLH and passed here.
+    @property
+    def cached_llh_maps(self):
+        return self._cached_llh_maps
+
+    @cached_llh_maps.setter
+    def cached_llh_maps(self, maps):
+        # This will throw a TypeError, if maps are not valid hp maps
+        nsrcs = hp.maptype(maps)
+        self._cached_llh_maps = maps
         return
 
 
@@ -912,9 +929,9 @@ class StackingExtendedClassicLLH(ClassicLLH):
         r"""Spatial probability of event i coming from extended source j.
 
         This is the modified ClassicLLH spatial signal term.
-        Here we can use multiple source poisitions and also using extended
+        Here we can use multiple source positions and also using extended
         source hypotheses.
-        Event distribution is still assumed to be approcimated by a gaussian.
+        Event distribution is still assumed to be approximated by a gaussian.
 
         4 Cases are possible for the src["sigma"] field:
 
@@ -938,61 +955,41 @@ class StackingExtendedClassicLLH(ClassicLLH):
 
         src: dict
              Containing information about n point sources which shall be used
-             in the hypothesis.
-             Fields are 'ra', 'dec', 'sigma', all in radians and 'weight' which
-             is the sources theoretical weight.
-             Each entry is describing one source Sj.
-             If each field only contains one entry, this is equal to the
-             non-stacking single source case from ClassicLLH.
-
-            Note: src['sigma'] can contain floats or healpy maps.
-                  In case of floats, the normal signal pdf is convolved with
-                  a gaussian of width src_sigma.
-                  If it contains a healpy map, this map is convolved with each
-                  event gaussian and used as the spatial pdf, thus using the
-                  complete information from directional reconstruction.
+             in the hypothesis. Fields are 'ra', 'dec', 'sigma', all in radians
+             and 'normw' which is the sources total, normed weight. Each entry
+             is describing one source :math:`S_j`.
+             Further information in ps_llh.StackingExtendedLLH.use_sources().
 
         Returns
         --------
         P : array-like
             Spatial signal probability for each event
         """
-        # Sanity checks and determine use case
-        if not isinstance(src, dict):
-            raise TypeError("src is no dictionary.")
-        # Check for all four possible cases of giving src information
-        n_ev = len(ev["ra"])
+        n_ev = len(ev)
         n_src = len(src["ra"])
+        sig = np.zeros(n_ev)
+
+        # Only use a shorter name for the normed src weights
+        norm_w = src["normw"]
+
+        # Check for all four possible cases of sigmas
         hp_map_type = np.zeros(n_src) - 1
         for i, sigmai in enumerate(src["sigma"]):
             try:
+                # Maptype is -1 if no valid map or 0 if valid
                 hp_map_type[i] = hp.maptype(sigmai)
             except TypeError as e:
                 # Just pass, because invalid maps return -1 as initialized
                 pass
 
-        # sigmas may only be floats or healpy maps
+        # sigmas must only be floats or healpy maps. If mixed, abort
         if np.any(hp_map_type == -1) and np.any(hp_map_type != -1):
             raise TypeError(
-                "Mixed float sigmas and llh maps in sigma field. Aborting.")
-
-        # Get src detector weight from BG spline -> Detector exposition
-        # for every src position. background expects recarray with field
-        # 'sinDec' so create it first
-        src_sin_dec = np.zeros((n_src, ), dtype=[("sinDec", float)])
-        src_sin_dec["sinDec"] = np.sin(src["dec"])
-        src_dec_w = self.background(src_sin_dec)
-
-        # Normalize weights: Total = Acceptance * Theoretical Weight / Sum
-        norm_w = src_dec_w * src["weight"]
-        norm_w = norm_w / np.sum(norm_w)
-
-        # Init signal array with -1 for debugging
-        sig = np.zeros(n_ev) - 1.
+                "Must not mix float sigmas and llh maps in sigma field.")
 
         # Case 2 or 4: We use healpy llh maps as source signal pdf
         if np.all(hp_map_type == 0):
-            print("StackingExtendedClassicLLH: Healpy Case")
+            print("StackingExtendedLLH: Healpy Case")
             # Get pixel index for every event
             NPIX = len(src["sigma"][0])
             NSIDE = hp.npix2nside(NPIX)
@@ -1003,23 +1000,24 @@ class StackingExtendedClassicLLH(ClassicLLH):
             # Add weighted maps, then no loop is required
             w = norm_w.reshape(n_src, 1)
             added_map = np.sum(src["sigma"] * w, axis=0)
-            # Convolve map with every event sigma and norm to pdf
-            # This can take time
-            print("# Start convolving ...")
-            convolved_maps = np.array(
-                [amp_hp.norm_healpy_map(
-                    hp.smoothing(
-                        added_map, sigma=sigma_evi, verbose=False)
-                    )[0] for sigma_evi in ev["sigma"]])
+            # Convolve map with *every* event sigma and norm to pdf if no
+            # cached values exist. This can take time...
+            if super._cached_llh_maps is None:
+                print("# Start convolving ...")
+                convolved_maps = np.array(
+                    [amp_hp.norm_healpy_map(
+                        hp.smoothing(
+                            added_map, sigma=sigma_evi, verbose=False)
+                        )[0] for sigma_evi in ev["sigma"]])
             # For every src location get the correct pdf signal value
             # Because the src maps were added with the weight before this
             # already is the stacked llh value for the signal
             sig = convolved_maps[:, pixind]
         # Case 1 or 3: We use gaussian approximation as source signal pdf
         elif np.all(hp_map_type == -1):
-            print("StackingExtendedClassicLLH: Float Case")
+            print("StackingExtendedLLH: Float Case")
             # Use normal ClassicLLH signal pdf with extended sigma
-            classic_sig = super(StackingExtendedClassicLLH, self).signal
+            classic_sig = super(StackingExtendedLLH, self).signal
             # Loop over every given src position
             for i in range(n_src):
                 # Convolve gaussians by adding sigmas squared
