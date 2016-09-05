@@ -882,24 +882,6 @@ class EnergyLLHfixed(EnergyLLH):
 ##############################################################################
 ## NEW Stacking Extended Classic LLH Model
 ##############################################################################
-# Healpy coordinate converter
-def _ThetaPhiToDecRa(th, phi):
-    """
-    Go from healpy coordinates to ra, dec.
-    http://stackoverflow.com/questions/29702010/healpy-pix2ang-
-    convert-from-healpix-index-to-ra-dec-or-glong-glat
-    """
-    # Same definition as in psLLH allsky-scan (not using ra = 2*np.pi - phi)
-    return np.pi / 2. - th, phi
-def _DecRaToThetaPhi(dec, ra):
-    """
-    Go from ra, dec to healpy coordinates theta, phi.
-    http://stackoverflow.com/questions/29702010/healpy-pix2ang-
-    convert-from-healpix-index-to-ra-dec-or-glong-glat
-    """
-    # Same definition as in psLLH allsky-scan (not using phi = 2*np.pi - ra)
-    return np.pi / 2. - dec, ra
-
 class StackingExtendedClassicLLH(ClassicLLH):
     r"""
     Extending the ClassicLLH model to be able to use stacking and handle
@@ -1005,7 +987,7 @@ class StackingExtendedClassicLLH(ClassicLLH):
         norm_w = src_dec_w * src["weight"]
         norm_w = norm_w / np.sum(norm_w)
 
-        # Create signal array storing the signal value for every event
+        # Init signal array with -1 for debugging
         sig = np.zeros(n_ev) - 1.
 
         # Case 2 or 4: We use healpy llh maps as source signal pdf
@@ -1040,17 +1022,6 @@ class StackingExtendedClassicLLH(ClassicLLH):
             classic_sig = super(StackingExtendedClassicLLH, self).signal
             # Loop over every given src position
             for i in range(n_src):
-                # Print src info
-                # temp = "src {src:d} : ra={ra:.3f}, dec={dec:.3f}," \
-                #        " sigma={sigma:.3f}, w={w:.3f}"
-                # context = {
-                #     "src" : i,
-                #     "ra" : src["ra"][i],
-                #     "dec" : src["dec"][i],
-                #     "sigma" : src["sigma"][i],
-                #     "w" : src["weight"][i],
-                #     }
-                # print(temp.format(**context))
                 # Convolve gaussians by adding sigmas squared
                 ev["sigma"] = np.sqrt(ev["sigma"]**2 + src["sigma"][i]**2)
                 # Stacking: For every source add signal weighted by detector
