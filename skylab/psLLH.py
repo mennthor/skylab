@@ -45,9 +45,12 @@ from . import set_pars
 from . import ps_model
 from . import utils
 
-# New imports for StackingExtendedLLH
+
+##############################################################################
+# New imports for HealpyLLH
 # My analysis tools
 import anapymods.healpy as amp_hp
+##############################################################################
 
 # get module logger
 def trace(self, message, *args, **kwargs):
@@ -102,10 +105,13 @@ _thresh_S = 0.
 _ub_perc = 1.
 _win_points = 50
 
-# StackingExtendedLLH variable defaults. Further explanations: See class
-_src_dict = None
+##############################################################################
+# HealpyLLH variable defaults. Further explanations in class
+_src = None
 _nsrcs = 0
-_cached_llh_maps = None
+_srcs_spatial_pdf_map = None
+_cached_exp_maps = None
+##############################################################################
 
 
 class PointSourceLLH(object):
@@ -2116,36 +2122,19 @@ def fs(args):
 
 
 ##############################################################################
-## NEW Stacking Extended Classic LLH
+# New HealpyLLH
 ##############################################################################
-class StackingExtendedLLH(PointSourceLLH):
+class HealpyLLH(PointSourceLLH):
     r"""
-    Point Source Likelihood class for stacked and extended sources
+    Likelihood class for stacked and extended sources using healpy maps for the
+    spatial signal pdf.
 
-    `PointSouceLLH` handles the data for one event sample, calculating
-    the unbinned, stacked Point Source Likelihood for extended sources
-
-    .. math::    \mathcal{L}=\prod_i\left(
-                        \frac{n_s}{N}\mathcal{S}^\mathrm{tot}
-                       +\left(1-\frac{n_s}{N}\right)\mathcal{B}\right)
-
-    .. math::    \mathcal{S}^{tot} = \frac{\sum W^j R^j S_i^j}{\sum W^j R^j}
+    This is intended to be used with the `ps_model.HealpyLLH` model.
 
     Attributes
     ----------
     livetime : float
         Livetime of the event sample in days.
-    log_level : int
-        Logging level for output information.
-    mode : str
-        Event selection mode for minimisation ("all", "band", "box").
-    nsource : float
-        Seed value for fitting nsource parameter.
-    nsource_bounds : array
-        Boundaries for fitting nsource parameter.
-    nsource_rho : float
-        Percentage of upper bound to not exceed nsource_rho times number of
-        selected events.
     seed : int
         Global seed for NumPy's random mode.
 
@@ -2153,9 +2142,10 @@ class StackingExtendedLLH(PointSourceLLH):
     -------
     use_sources(src)
         Give a list of sources to be used further in stacking. `src` is a
-        dictionary with fields `ra`, `dec`, `weight` and `sigma`. `sigma` can
-        either be a float value for sigma or a healpy llh map for each source
-        in `src`.
+        record array with fields `ra`, `dec`, `weight` and `sigma`.
+        `sigma` is a list of healpy maps used as a spatial pdf for each source.
+
+
     do_trials(**kwargs)
         Analyse scrambled trials for the given sources.
     llh(**fit_pars)
@@ -2169,15 +2159,10 @@ class StackingExtendedLLH(PointSourceLLH):
     """
     # Default values for psLLH class. Can be overwritten in constructor
     # by setting the attribute as keyword argument
-
-    # Dict of sources used for stacking. Must be set with self.use_sources()
-    _src_dict = _src_dict
+    _src = _src
     _nsrcs = _nsrcs
-
-    # Cached llh maps. If src sigma is given as healpy map it is presmoothed
-    # with every event, because it takes a lot of time. Later only injected
-    # events must be smoothed, which is faster
-    _cached_llh_maps = _cached_llh_maps
+    _srcs_spatial_pdf_map = _srcs_spatial_pdf_map
+    _cached_exp_maps = _cached_exp_maps
 
 
     def __init__(self, exp, mc, livetime, scramble=True, **kwargs):
@@ -2207,54 +2192,46 @@ class StackingExtendedLLH(PointSourceLLH):
             Configuration parameters to assign values to class attributes.
 
         """
-        llh_model = kwargs.pop("llh_model", ps_model.ClassicLLH())
-        if not isinstance(llh_model, ps_model.StackingExtendedLLH):
-            print("LLH model must be instance of ps_model.StackingExtendedLLH" \
-                + "Setting model to ps_model.StackingExtendedLLH().")
+        llh_model = kwargs.pop("llh_model", ps_model.HealpyLLH())
+        if not isinstance(llh_model, ps_model.HealpyLLH):
+            print("LLH model must be instance of ps_model.HealpyLLH"
+                + "Setting model to ps_model.HealpyLLH().")
+            # LLH only works with HealpyLLH model
+            llh_model = ps_model.HealpyLLH()
 
-            # set llh model to new stacking extended model, because this
-            # LLH won't work with other models at the moment
-            llh_model = ps_model.StackingExtendedClassicLLH()
-
-        super(StackingExtendedLLH, self).__init__(exp, mc, livetime,
+        super(HealpyLLH, self).__init__(exp, mc, livetime,
             scramble=scramble, llh_model=llh_model, **kwargs)
 
         return
 
-    def __str__(self):
+    def __str__(self, verb=False):
         r"""
-        String representation of StackingExtendedLLH.
-        Just added information about the given sources.
+        String representation of class.
+        Just added information about the given sources. Print super info with
+        `print(class_obj.__str__(verb=True))`
         """
-        sout = super(StackingExtendedLLH, self).__str__() + "\n"
+        if verb:
+            sout = super(HealpyLLH, self).__str__() + "\n"
+        else:
+            sout = ""
 
         # Just add src list information
-        if self._src_dict is None:
+        if self._src is None:
             sout += "src list : no srcs given yet.\n"
         else:
             sout += "src list : {} srcs given\n".format(self._nsrcs)
-            sout += "    DECs         : {}\n".format(self._src_dict["dec"])
-            sout += "    RAs          : {}\n".format(self._src_dict["ra"])
-            sout += "    weights      : {}\n".format(self._src_dict["weight"])
-            sout += "    accept. w.   : {}\n".format(self._src_dict["decw"])
-            sout += "    -> normed w. : {}\n".format(self._src_dict["normw"])
+            sout += "    DECs         : {}\n".format(self._src["dec"])
+            sout += "    RAs          : {}\n".format(self._src["ra"])
+            sout += "    src. wghts   : {}\n".format(self._src["weight"])
+            sout += "    det. wghts   : {}\n".format(self._src["decw"])
+            sout += "    normed w_tot : {}\n".format(self._src["normw"])
         sout += 67 * "-" + "\n"
 
         return sout
 
 
     # INTERNAL METHODS
-    # Update llh_model cached values. Simple conveniance wrapper
-    def _update_llh_model_cache(self, maps):
-        """
-        Use a wrapper for multiple calls. Update the cache in llh_model.
-        Note: This overwrites the previously cached variables
-        """
-        self.llh_model.cached_llh_maps = maps
-        return
-
-
-    # TODO: Fit to be used with StackingExtendedLLH
+    # TODOs Mode is always all. Only need to hjandle injected events
     def _select_events(self, src_ra, src_dec, **kwargs):
         r"""Select events around source location(s) used in llh calculation.
 
@@ -2355,8 +2332,7 @@ class StackingExtendedLLH(PointSourceLLH):
 
 
     # PROPERTIES for public variables using getters and setters
-
-    # Overwrite super.llh_model setter because only the StackingExtendedLLH
+    # Overwrite super.llh_model setter because only the HealpyLLH
     # model is usable with this class
     @PointSourceLLH.llh_model.setter
     def llh_model(self, args, **kwargs):
@@ -2365,115 +2341,115 @@ class StackingExtendedLLH(PointSourceLLH):
 
         val, mc = args
 
-        if not isinstance(val, ps_model.StackingExtendedLLH):
+        if not isinstance(val, ps_model.HealpyLLH):
             raise TypeError(
-                "LLH model must be instance of ps_model.StackingExtendedLLH")
+                "LLH model must be instance of ps_model.HealpyLLH")
 
         # set likelihood module to variable and fill it with data
         self._llh_model = val
         self._llh_model(self.exp, mc, self.livetime, **kwargs)
         return
 
+    # The combined spatial source pdf might be worth looking at from outside
+    @property
+    def srcs_spatial_pdf_map(self):
+        return self._srcs_spatial_pdf_map
+
 
     # PUBLIC methods
-    # New method: Set up the srcs first to make caching of llh maps available
-    def use_sources(self, srcs):
+    def use_sources(self, src):
         r"""
         Use this function to give a list of sources prior to calculating
         anything. This is different to the standard PointSourceLLH in which
         each function gets a single source in the argument.
-        Here we use this way to cache time intensive calculations as healpy
-        map smoothing beforehand.
-
-        If only one source is given, this resembles to the ClassicLLH case,
-        with (sigma > 0) or without (sigma=0) source extension.
-
-        Allowed for the src["sigma"] field are:
-        1. src["sigma"] is a list of floats:
-           Here we use the ClassicLLH.signal function but with convolved sigma
-           to account for source extension:
-
-           .. math::
-              \sigma_\mathrm{total} = \sqrt{\sigma_\mathrm{event}^2
-                                    + \sigma_\mathrm{src}^2}
-
-        2. src["sigma"] is a list of healpy maps.
-           Attention: Also if only 1 src is given this must be a list of a
-           single map in this case. Otherwise it will be wrongly assumed that
-           we have float sigmas.
-           Healpy maps are convolved with a gaussian with the reconstruction
-           sigma of each event and used as the spatial pdf for each event, thus
-           using the complete information from the directional reconstruction.
+        Here we use this way to cache time intensive healpy map smoothing
+        beforehand.
 
         Parameters
         ----------
-        src: dict
-             Containing information about n point sources which shall be used
-             in the hypothesis.
-             Fields are `ra`, `dec`, `sigma`, all in radians and `weight` which
-             is the sources theoretical weight.
-             Each entry is describing one source :math:`S^j`.
+        src is a numpy record array with the following fields:
+        ra, dec: array
+             Position of the sources in equatorial coordinates.
+        weight : array
+            Theoretical (or intrinsic) weight for each source.
+        sigma : array
+           List of healpy maps. The maps are convolved with a gaussian with the
+           reconstruction sigma of each event and used as the spatial pdf for
+           each event. (dtype is object or numpy.ndarray)
         """
         # Sanity checks
-        # First check if src list is dictionary
-        if not isinstance(srcs, dict):
-            raise TypeError("src list is not a dictionary.")
-
-        # Check if dict has all needed fields
-        keys = ["ra", "dec", "sigma", "weight"]
-        if not all (k in srcs for k in keys):
+        # Check if src recarray has all needed names
+        names = ["ra", "dec", "weight", "sigma"]
+        if not all (k in src.dtype.names for k in names):
             raise KeyError(
-                "src dict must have keys 'ra', 'dec', 'sigma' and 'weight'")
+                "src array must have names 'ra', 'dec', 'weight' and 'sigma'")
 
-        # Check if lengthes are the same
-        assert (len(srcs["ra"]) == len(srcs["dec"]) ==
-            len(srcs["sigma"]) == len(srcs["weight"]))
-        self._nsrcs = len(srcs["ra"])
+        # Check if sigma field contains valid healpy maps
+        if not hp.maptype(src["sigma"]) > 0:
+            raise ValueError("Healpy maps in 'sigma' field not valid.")
 
-        # Check if coordinates ar valid equatorial coordinates in radians
-        if np.any(srcs["ra"] < 0) or np.any(srcs["ra"] > 2*np.pi):
+        # Check if coordinates are valid equatorial coordinates in radians
+        if np.any(src["ra"] < 0) or np.any(src["ra"] > 2*np.pi):
             raise ValueError("RA value(s) not valid equatorial coordinates")
-        if np.any(srcs["dec"] < -np.pi/2.) or np.any(srcs["dec"] > +np.pi/2.):
+        if np.any(src["dec"] < -np.pi/2.) or np.any(src["dec"] > +np.pi/2.):
             raise ValueError("DEC value(s) not valid equatorial coordinates")
 
-        # Check which type the sigmas are. Can be 'healpy' or 'float'
-        src_sigma_type = self.llh_model._get_sigma_type(
-            srcs["sigma"], self._nsrcs)
+        # Zero weight makes no sense
+        if np.any(src["weight"] <= 0):
+            raise ValueError("Source weight(s) <= 0 detected.")
         # End of sanity checks
+
+        # Get number of sources
+        self._nsrcs = len(src)
 
         # Get src detector weight from BG spline -> Detector exposition
         # for every src position. Background expects recarray with field
         # 'sinDec' so create it first
-        src_sin_dec = np.zeros((self._nsrcs, ), dtype=[("sinDec", float)])
-        src_sin_dec["sinDec"] = np.sin(srcs["dec"])
+        src_sin_dec = np.zeros((self._nsrcs, ), dtype=[("sinDec", np.float)])
+        src_sin_dec["sinDec"] = np.sin(src["dec"])
         src_dec_w = self.llh_model.background(src_sin_dec)
 
         # Normalize weights: Total = (Acceptance * Theoretical Weight) / Sum
-        norm_w = src_dec_w * srcs["weight"]
+        norm_w = src_dec_w * src["weight"]
         norm_w = norm_w / np.sum(norm_w)
 
         # Cache smoothed llh maps for all exp events if healpy sigma is given
-        if src_sigma_type == "healpy":
-            print("Healpy maps given as sigma. Start caching of smoothed \n"
-                + "llh maps for every event in exp.\n")
-            # First add weighted maps to create single signal map
-            added_map = self.llh_model._add_weighted_maps(src["sigma"], norm_w)
-            # Then convolve with event sigmas from exp to cache values
-            self._cached_llh_maps = self.llh_model._convolve_maps(
-                added_map, self.exp["sigma"])
-            # Give the llh_model the cached exp maps for the signal function
-            self._update_llh_model_cache(self._cached_llh_maps)
+        print("Healpy maps given as sigma. Start caching of smoothed \n"
+            + "llh maps for every event in exp.\n")
+        # First add weighted maps to create single signal map
+        self._srcs_spatial_pdf_map = self.llh_model._add_weighted_maps(
+            src["sigma"], norm_w)
+        # Then convolve with event sigmas from exp to cache values
+        self._cached_exp_maps = self.llh_model._convolve_maps(
+            self._srcs_spatial_pdf_map, self.exp["sigma"])
+        # Give the llh_model the cached exp maps for the signal function
+        self.llh_model._cached_exp_maps = self._cached_exp_maps
 
-        # Save to class src dict. Add normalized total weights and
-        # detector declination weights
-        self._src_dict = srcs
-        self._src_dict["decw"] = src_dec_w
-        self._src_dict["normw"] = norm_w
+        # Add norm. total weights and detector decl. weights for later use
+        src = np.lib.recfunctions.append_fields(
+            src, "normw", norm_w, dtypes=np.float, usemask=False)
+        src = np.lib.recfunctions.append_fields(
+            src, "decw", src_dec_w, dtypes=np.float, usemask=False)
+        self._src = src
 
         return
 
 
-    # TODO: Fit to be used with StackingExtendedLLH
+    def reset(self):
+        r"""
+        Reset all cached values.
+        Additionaly reset cached convolved llh maps from src list.
+        """
+        super(HealpyLLH, self).reset()
+
+        self._src_dict = _src_dict
+        self._nsrcs = _nsrcs
+        self._cached_exp_maps = _cached_exp_maps
+
+        return
+
+
+    # TODOs
     def do_trials(self, src_ra, src_dec, **kwargs):
         r"""Calculation of scrambled trials.
 
@@ -2819,19 +2795,6 @@ class StackingExtendedLLH(PointSourceLLH):
         fmin *= -np.sign(xmin["nsources"])
 
         return fmin, xmin
-
-    def reset(self):
-        r"""
-        Reset all cached values.
-        Additionaly reset cached convolved llh maps from src list.
-        """
-        super(StackingExtendedLLH, self).reset()
-
-        self._src_dict = _src_dict
-        self._nsrcs = _nsrcs
-        self._cached_llh_maps = _cached_llh_maps
-
-        return
 
     def weighted_sensitivity(self, src_ra, src_dec, alpha, beta, inj, mc, **kwargs):
         """Calculate the point source sensitivity for a given source
