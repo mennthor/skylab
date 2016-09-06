@@ -931,6 +931,58 @@ class StackingExtendedLLH(ClassicLLH):
 
         return convolved_maps
 
+    def _get_sigma_type(self, sigma, nsrcs):
+        """
+        Function to test what sigmas are given.
+        Allowed are either list of healpy maps OR list of floats.
+
+        Returns
+        -------
+        src_sigma_type : str
+            Returns 'healpy' if healpy maps or 'float' if floats are given.
+        """
+        # If wrongly a single healpy map is given this will throw an error
+        sigma = np.atleast_1d(sigmas)
+        if len(sigma) != nsrcs:
+            raise ValueError("Length of sigma differs from number of sources")
+
+        # We decide 3 cases:
+        #   1. List of floats with length!=nsrcs: hp.maptype throws an error
+        #   2. List of floats with length==nsrcs: hp.maptype returns 0, because
+        #      it assumes, it has a single healpy map given.
+        #   3. List of nsrcs valid healpy maps given: hp.maptype returns nsrcs
+        # Other cases are taken care of by the length comparison above.
+        try:
+            maptype = hp.maptype(sigma)
+        except TypeError:
+            print("We have nsrcs={} floats given as sigmas.".format(nsrcs))
+            src_sigma_type = "float"
+            maptype = -1
+
+        if not maptype == -1:
+            if maptype == 0:
+                print("nsrcs={} is a valid number of hp pixels, ".format(nsrcs)
+                    + "but floats are given as sigmas.")
+                src_sigma_type = "float"
+            elif maptype > 0:
+                print("nsrcs={} valid healpy maps are given.".format(nsrcs))
+                src_sigma_type = "healpy"
+            else:
+                raise ValueError(
+                    "src['sigma'] has unknown format. Need float or healpy list")
+
+        return src_sigma_type
+
+    def _add_weighted_maps(self, m , w):
+        """
+        Add weighted healpy maps. Lenght of maps m and weights w must match.
+        """
+        if len(w) != len(m):
+            raise ValueError("Lenghts of map and weight vector don't match.")
+        # Make column vector from weight to easily multiply to map vector
+        w = w.reshape(len(w), 1)
+        return np.sum(m * w, axis=0)
+
 
     # Getter/Setter for cached llh maps. Every event smoothes the signal map
     # which takes a long time, but doesn't change per event.
@@ -987,68 +1039,57 @@ class StackingExtendedLLH(ClassicLLH):
         P : array-like
             Spatial signal probability for each event
         """
-        n_ev = len(ev)
-        n_src = len(src["ra"])
-        sig = np.zeros(n_ev)
-
-        # Only use a shorter name for the normed src weights
+        src_sigma = src["sigma"]
         norm_w = src["normw"]
+        n_ev = len(ev)
+        n_src = len(src_sigma)
+        signal = np.zeros(n_ev)
 
-        # Check for all four possible cases of sigmas
-        hp_map_type = np.zeros(n_src) - 1
-        for i, sigmai in enumerate(src["sigma"]):
-            try:
-                # Maptype is -1 if no valid map or 0 if valid
-                hp_map_type[i] = hp.maptype(sigmai)
-            except TypeError as e:
-                # Just pass, because invalid maps return -1 as initialized
-                pass
+        # Check for src sigma type to choose the corrcect signal function below
+        src_sigma_type = self.llh_model._get_sigma_type(
+            src_sigma, n_src)
 
-        # sigmas must only be floats or healpy maps. If mixed, abort
-        if np.any(hp_map_type == -1) and np.any(hp_map_type != -1):
-            raise TypeError(
-                "Must not mix float sigmas and llh maps in sigma field.")
-
-        # Case 2 or 4: We use healpy llh maps as source signal pdf
-        if np.all(hp_map_type == 0):
+        if src_sigma_type == "healpy":
             print("StackingExtendedLLH: Healpy Case")
             # Get pixel index for every event
-            NPIX = len(src["sigma"][0])
-            NSIDE = hp.npix2nside(NPIX)
-            # Shift dec [-pi/2, pi/2] to healpy theta [0, pi], so that
-            # dec -pi/2 -> theta pi and dec pi/2 -> theta 0
-            th, phi = _DecRaToThetaPhi(ev["dec"], ev["ra"])
+            NSIDE = hp.get_nside(src_sigma[0])
+            NPIX = hp.nside2npix(NSIDE)
+            # Shift RA, DEC to healpy coordinates for proper use of pix indices
+            th, phi = self._DecRaToThetaPhi(ev["dec"], ev["ra"])
             pixind = hp.ang2pix(NSIDE, th, phi)
-            # Add weighted maps, then no loop is required
-            w = norm_w.reshape(n_src, 1)
-            added_map = np.sum(src["sigma"] * w, axis=0)
+
             # Convolve map with *every* event sigma and norm to pdf if no
             # cached values exist. This can take time...
-            if super._cached_llh_maps is None:
-                print("No cached maps available. Start caching.\n")
-                convolved_maps = self._convolve_maps(added_map, ev["sigma"])
-            # For every src location get the correct pdf signal value
+            if self.cached_llh_maps is None:
+                print("No cached maps available. Start convolving.\n")
+                # First add weighted maps to create single signal map
+                added_map = self._add_weighted_maps(src_sigma, norm_w)
+                convolved_maps = self._convolve_maps(added_map)
+            else:
+                convolved_maps = self.cached_llh_maps
+
+            # For every src location get the correct pdf signal value.
             # Because the src maps were added with the weight before this
             # already is the stacked llh value for the signal
-            sig = convolved_maps[:, pixind]
-        # Case 1 or 3: We use gaussian approximation as source signal pdf
-        elif np.all(hp_map_type == -1):
+            signal = convolved_maps[:, pixind]
+        elif src_sigma_type == "float":
             print("StackingExtendedLLH: Float Case")
             # Use normal ClassicLLH signal pdf with extended sigma
             classic_sig = super(StackingExtendedLLH, self).signal
+
             # Loop over every given src position
             for i in range(n_src):
                 # Convolve gaussians by adding sigmas squared
-                ev["sigma"] = np.sqrt(ev["sigma"]**2 + src["sigma"][i]**2)
+                ev["sigma"] = np.sqrt(ev["sigma"]**2 + src_sigma[i]**2)
                 # Stacking: For every source add signal weighted by detector
                 # src_dec_w and by the srcs intrinsic theoretical weight src_w
-                sig = sig + norm_w[i] * classic_sig(
+                signal += norm_w[i] * classic_sig(
                     src_ra=src["ra"][i], src_dec=src["dec"][i], ev=ev)
         else:
             raise TypeError(
-                "src['sigma'] doesn't match any of the four conditions")
+                "src['sigma'] is neither float nor healpy map list.")
 
-        return sig
+        return signal
 
 
 

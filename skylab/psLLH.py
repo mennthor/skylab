@@ -2180,8 +2180,7 @@ class StackingExtendedLLH(PointSourceLLH):
     _cached_llh_maps = _cached_llh_maps
 
 
-    def __init__(self, exp, mc, livetime,
-                 scramble=True, upscale=False, **kwargs):
+    def __init__(self, exp, mc, livetime, scramble=True, **kwargs):
         r"""Constructor of `PointSourceLikelihood`.
 
         Only the correct llh model is checked. Everything else is passed to
@@ -2203,8 +2202,6 @@ class StackingExtendedLLH(PointSourceLLH):
         ----------------
         scramble : bool
             Scramble data rightaway.
-        upscale : bool or float
-            If float, scale data to match livetime *upscale*
 
         kwargs
             Configuration parameters to assign values to class attributes.
@@ -2220,7 +2217,7 @@ class StackingExtendedLLH(PointSourceLLH):
             llh_model = ps_model.StackingExtendedClassicLLH()
 
         super(StackingExtendedLLH, self).__init__(exp, mc, livetime,
-            scramble=True, upscale=False, llh_model=llh_model, **kwargs)
+            scramble=scramble, llh_model=llh_model, **kwargs)
 
         return
 
@@ -2256,15 +2253,6 @@ class StackingExtendedLLH(PointSourceLLH):
         self.llh_model.cached_llh_maps = maps
         return
 
-    # Append llh_model cached values. Simple conveniance wrapper
-    def _append_llh_model_cache(self, maps):
-        """
-        Use a wrapper for multiple calls. Update the cache in llh_model.
-        Note: This append the new maps to the previously cached variables
-        """
-        self.llh_model.cached_llh_maps = np.append(
-            self.llh_model.cached_llh_maps, maps, axis=0)
-        return
 
     # TODO: Fit to be used with StackingExtendedLLH
     def _select_events(self, src_ra, src_dec, **kwargs):
@@ -2397,20 +2385,25 @@ class StackingExtendedLLH(PointSourceLLH):
         Here we use this way to cache time intensive calculations as healpy
         map smoothing beforehand.
 
-        4 Cases are possible for the src["sigma"] field:
+        If only one source is given, this resembles to the ClassicLLH case,
+        with (sigma > 0) or without (sigma=0) source extension.
 
-        1. Only 1 src given, float sigma:
-           Use ClassicLLH signal pdf with concolved sig = sig^2 + sig_src^2.
+        Allowed for the src["sigma"] field are:
+        1. src["sigma"] is a list of floats:
+           Here we use the ClassicLLH.signal function but with convolved sigma
+           to account for source extension:
 
-        2. Only 1 src given, healpy sigma:
-           Return signal pdf from healpy map convolved with event sigma using
-           the healpy.sphtfunc.smoothing() function.
+           .. math::
+              \sigma_\mathrm{total} = \sqrt{\sigma_\mathrm{event}^2
+                                    + \sigma_\mathrm{src}^2}
 
-        3. Multiple srcs, float sigmas:
-           Use stacked LLH in combination with case 1.
-
-        4. Multiple srcs, healpy sigmas:
-           Use stacked LLH in combination with case 2.
+        2. src["sigma"] is a list of healpy maps.
+           Attention: Also if only 1 src is given this must be a list of a
+           single map in this case. Otherwise it will be wrongly assumed that
+           we have float sigmas.
+           Healpy maps are convolved with a gaussian with the reconstruction
+           sigma of each event and used as the spatial pdf for each event, thus
+           using the complete information from the directional reconstruction.
 
         Parameters
         ----------
@@ -2420,23 +2413,6 @@ class StackingExtendedLLH(PointSourceLLH):
              Fields are `ra`, `dec`, `sigma`, all in radians and `weight` which
              is the sources theoretical weight.
              Each entry is describing one source :math:`S^j`.
-             If each field only contains one entry, this is equal to the
-             non-stacking single source case from ClassicLLH, but with a
-             possible source extension. If only one src with `sigma=0` is
-             given, we have the PointSourceLLH identical case.
-
-            Note: `src['sigma']` can contain floats or healpy maps.
-                  In case of floats, the normal signal pdf is convolved with
-                  a gaussian of width src_sigma.
-
-                    .. math::
-                       \sigma_\mathrm{tot} = \sqrt{\simga_\mathrm{ev}^2
-                                                  +\simga_\mathrm{src}^2}
-
-                  If it contains a healpy map, this map is convolved with a
-                  gaussian with the reconstruction sigma of each event and used
-                  as the spatial pdf, thus using the complete information from
-                  the sources directional reconstruction.
         """
         # Sanity checks
         # First check if src list is dictionary
@@ -2460,29 +2436,9 @@ class StackingExtendedLLH(PointSourceLLH):
         if np.any(srcs["dec"] < -np.pi/2.) or np.any(srcs["dec"] > +np.pi/2.):
             raise ValueError("DEC value(s) not valid equatorial coordinates")
 
-        # Check for all four possible cases of sigmas
-        hp_map_type = np.zeros(self._nsrcs) - 1
-        for i, sigmai in enumerate(srcs["sigma"]):
-            try:
-                # Maptype is -1 if no valid map or 0 if valid
-                hp_map_type[i] = hp.maptype(sigmai)
-            except TypeError as e:
-                # Just pass, because invalid maps return -1 as initialized
-                pass
-
-        # sigmas must only be floats or healpy maps. If mixed, abort
-        if np.any(hp_map_type == -1) and np.any(hp_map_type != -1):
-            raise TypeError(
-                "Must not mix float sigmas and llh maps in sigma field.")
-
-        # Remember map type
-        if np.all(hp_map_type == -1):
-            src_sigma_type = -1
-        elif np.all(hp_map_type == 0):
-            src_sigma_type = 0
-        else:
-            raise ValueError(
-                "src['sigma'] has unknown format. Need float or healpy list")
+        # Check which type the sigmas are. Can be 'healpy' or 'float'
+        src_sigma_type = self.llh_model._get_sigma_type(
+            srcs["sigma"], self._nsrcs)
         # End of sanity checks
 
         # Get src detector weight from BG spline -> Detector exposition
@@ -2496,27 +2452,16 @@ class StackingExtendedLLH(PointSourceLLH):
         norm_w = src_dec_w * srcs["weight"]
         norm_w = norm_w / np.sum(norm_w)
 
-        # Cache smoothed llh maps if healpy sigma is given
-        if src_sigma_type == 0:
-            start = time.time()
+        # Cache smoothed llh maps for all exp events if healpy sigma is given
+        if src_sigma_type == "healpy":
             print("Healpy maps given as sigma. Start caching of smoothed \n"
                 + "llh maps for every event in exp.\n")
-
             # First add weighted maps to create single signal map
-            w = norm_w.reshape(self._nsrcs, 1)
-            added_map = np.sum(srcs["sigma"] * w, axis=0)
-            self._cached_llh_maps = self.llh_model._convolve_maps(added_map)
-
-            stop = time.time()
-            mins, secs = divmod(stop - start, 60)
-            hours, mins = divmod(mins, 60)
-            sout = "Finished caching {0:d} maps ".format(
-                len(self._cached_llh_maps))
-            sout += "after {0:3d}h {1:2d}' {2:4.2f}''".format(
-                int(hours), int(mins), secs)
-            print(sout)
-
-            # Give the llh_model the cached maps for the signal function
+            added_map = self.llh_model._add_weighted_maps(src["sigma"], norm_w)
+            # Then convolve with event sigmas from exp to cache values
+            self._cached_llh_maps = self.llh_model._convolve_maps(
+                added_map, self.exp["sigma"])
+            # Give the llh_model the cached exp maps for the signal function
             self._update_llh_model_cache(self._cached_llh_maps)
 
         # Save to class src dict. Add normalized total weights and
