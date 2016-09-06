@@ -2247,14 +2247,23 @@ class StackingExtendedLLH(PointSourceLLH):
 
 
     # INTERNAL METHODS
-    # Update llh_model cached values
+    # Update llh_model cached values. Simple conveniance wrapper
     def _update_llh_model_cache(self, maps):
         """
         Use a wrapper for multiple calls. Update the cache in llh_model.
-        This is used when a new event selection is done. Only the masked cached
-        maps are given to the llh_model.
+        Note: This overwrites the previously cached variables
         """
         self.llh_model.cached_llh_maps = maps
+        return
+
+    # Append llh_model cached values. Simple conveniance wrapper
+    def _append_llh_model_cache(self, maps):
+        """
+        Use a wrapper for multiple calls. Update the cache in llh_model.
+        Note: This append the new maps to the previously cached variables
+        """
+        self.llh_model.cached_llh_maps = np.append(
+            self.llh_model.cached_llh_maps, maps, axis=0)
         return
 
     # TODO: Fit to be used with StackingExtendedLLH
@@ -2490,18 +2499,13 @@ class StackingExtendedLLH(PointSourceLLH):
         # Cache smoothed llh maps if healpy sigma is given
         if src_sigma_type == 0:
             start = time.time()
-            sout = "Healpy maps given as sigma. Start caching of smoothed \n"
-            sout += "llh maps for every event in exp.\n"
-            print(sout)
+            print("Healpy maps given as sigma. Start caching of smoothed \n"
+                + "llh maps for every event in exp.\n")
 
             # First add weighted maps to create single signal map
             w = norm_w.reshape(self._nsrcs, 1)
             added_map = np.sum(srcs["sigma"] * w, axis=0)
-            # Then convolve signal map with every event gaussian sigma and make
-            # a pdf from every map
-            self._cached_llh_maps = np.array([amp_hp.norm_healpy_map(
-                    hp.smoothing(added_map, sigma=sigma_evi, verbose=False))
-                [0] for sigma_evi in self.exp["sigma"]])
+            self._cached_llh_maps = self.llh_model._convolve_maps(added_map)
 
             stop = time.time()
             mins, secs = divmod(stop - start, 60)

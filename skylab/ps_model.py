@@ -31,6 +31,8 @@ from scipy.stats import norm
 
 # New imports for StackingExtendedLLH
 import healpy as hp
+# Status bar for long caching of healpy maps
+from tqdm import tqdm
 # My analysis tools
 import anapymods.healpy as amp_hp
 
@@ -910,6 +912,26 @@ class StackingExtendedLLH(ClassicLLH):
         return
 
 
+     # INTERNAL METHODS
+    def _convolve_maps(self, m, sigmas):
+        """
+        This function does:
+        1. Smooth the given map m with every given sigma (aka gaussian
+           convolution). Progress is tracked with tqdm because this may take
+           a while.
+        2. After convolution make a pdf from every map
+        3. Put everything in an array and return that
+        """
+        convolved_maps = np.array(
+            [amp_hp.norm_healpy_map(
+                hp.smoothing(m, sigma=sigma_evi, verbose=False)
+                )
+            for sigma_evi in tqdm(sigmas)]
+            )
+
+        return convolved_maps
+
+
     # Getter/Setter for cached llh maps. Every event smoothes the signal map
     # which takes a long time, but doesn't change per event.
     # So values get cached in ps_llh.StackingExtendedLLH and passed here.
@@ -1003,12 +1025,8 @@ class StackingExtendedLLH(ClassicLLH):
             # Convolve map with *every* event sigma and norm to pdf if no
             # cached values exist. This can take time...
             if super._cached_llh_maps is None:
-                print("# Start convolving ...")
-                convolved_maps = np.array(
-                    [amp_hp.norm_healpy_map(
-                        hp.smoothing(
-                            added_map, sigma=sigma_evi, verbose=False)
-                        )[0] for sigma_evi in ev["sigma"]])
+                print("No cached maps available. Start caching.\n")
+                convolved_maps = self._convolve_maps(added_map, ev["sigma"])
             # For every src location get the correct pdf signal value
             # Because the src maps were added with the weight before this
             # already is the stacked llh value for the signal
