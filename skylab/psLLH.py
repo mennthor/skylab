@@ -111,6 +111,8 @@ _src = None
 _nsrcs = 0
 _srcs_spatial_pdf_map = None
 _cached_exp_maps = None
+_inj = None
+_n_inj = 0
 ##############################################################################
 
 
@@ -2163,6 +2165,8 @@ class HealpyLLH(PointSourceLLH):
     _nsrcs = _nsrcs
     _srcs_spatial_pdf_map = _srcs_spatial_pdf_map
     _cached_exp_maps = _cached_exp_maps
+    _inj = _inj
+    _n_inj = _n_inj
 
 
     def __init__(self, exp, mc, livetime, scramble=True, **kwargs):
@@ -2190,7 +2194,7 @@ class HealpyLLH(PointSourceLLH):
 
         kwargs
             Configuration parameters to assign values to class attributes.
-
+            Not all attributes from PointSourceLLH are supported here.
         """
         llh_model = kwargs.pop("llh_model", ps_model.HealpyLLH())
         if not isinstance(llh_model, ps_model.HealpyLLH):
@@ -2199,8 +2203,14 @@ class HealpyLLH(PointSourceLLH):
             # LLH only works with HealpyLLH model
             llh_model = ps_model.HealpyLLH()
 
+        # Mode is always `all` because with many extended sources, declination
+        # bands overlap anyway and event selectiuon gets simpler. Remove it
+        # from kwargs and set explivitly to `all`
+        _ = kwargs.pop("mode", "all")
+        mode = "all"
+
         super(HealpyLLH, self).__init__(exp, mc, livetime,
-            scramble=scramble, llh_model=llh_model, **kwargs)
+            scramble=scramble, llh_model=llh_model, mode=mode, **kwargs)
 
         return
 
@@ -2231,9 +2241,10 @@ class HealpyLLH(PointSourceLLH):
 
 
     # INTERNAL METHODS
-    # TODOs Mode is always all. Only need to hjandle injected events
     def _select_events(self, src_ra, src_dec, **kwargs):
-        r"""Select events around source location(s) used in llh calculation.
+        r"""
+        Select events around source location(s) used in llh calculation.
+        Always select all events (mode='all').
 
         Parameters
         ----------
@@ -2248,7 +2259,6 @@ class HealpyLLH(PointSourceLLH):
             Events to add to the selected events, fields equal to exp. data.
 
         """
-
         scramble = kwargs.pop("scramble", False)
         inject = kwargs.pop("inject", None)
         if kwargs:
@@ -2270,12 +2280,6 @@ class HealpyLLH(PointSourceLLH):
         if self.mode == "all" :
             # all events are selected
             exp_mask = np.ones_like(self.exp["sinDec"], dtype=np.bool)
-
-        elif self.mode in ["band", "box"]:
-            # get events that are within the declination band
-            exp_mask = ((self.exp["sinDec"] > np.sin(min_dec))
-                        & (self.exp["sinDec"] < np.sin(max_dec)))
-
         else:
             raise ValueError("Not supported mode: {0:s}".format(self.mode))
 
@@ -2287,30 +2291,11 @@ class HealpyLLH(PointSourceLLH):
             self._ev["ra"] = self.random.uniform(0., 2. * np.pi,
                                                  size=len(self._ev))
 
-        # selection in rightascension
-        if self.mode == "box":
-            # the solid angle dOmega = dRA * dSinDec = dRA * dDec * cos(dec)
-            # is a function of declination, i.e., for a constant dOmega,
-            # the rightascension value has to change with declination
-            cosFact = np.amin(np.cos([min_dec, max_dec]))
-            dPhi = np.amin([2. * np.pi, 2. * self.delta_ang / cosFact])
-            ra_dist = np.fabs((self._ev["ra"] - src_ra + np.pi) % (2. * np.pi)
-                              - np.pi)
-            mask = ra_dist < dPhi/2.
-
-            self._ev = self._ev[mask]
-
-        self._src_ra = src_ra
-        self._src_dec = src_dec
-
         if inject is not None:
-            self._ev = np.append(self._ev,
-                                 numpy.lib.recfunctions.append_fields(
-                                    inject, "B",
-                                    self.llh_model.background(inject),
-                                    usemask=False))
+            self._inj = numpy.lib.recfunctions.append_fields(
+                inject, "B", self.llh_model.background(inject), usemask=False)
 
-            self._N += len(inject)
+            self._n_inj += len(inject)
 
         # calculate signal term
         self._ev_S = self.llh_model.signal(src_ra, src_dec, self._ev)
@@ -2355,8 +2340,23 @@ class HealpyLLH(PointSourceLLH):
     def srcs_spatial_pdf_map(self):
         return self._srcs_spatial_pdf_map
 
+    @property
+    def mode(self):
+        return self._mode
+
+    # Mode shpuld not be changed. Always all events are used.
+    @PointSourceLLH.mode.setter
+    def mode(self, val):
+        if val != "all":
+            print("Mode is always 'all' and can't be changed.")
+        return
+
 
     # PUBLIC methods
+    # TODO: Eigentlich könnten MC maps auch gecached werden. exp und mc sind
+    # fest pro psLLH Objekt. Es müssten dann nur die injizierten MC events
+    # zu den cached maps zugeordnet werden (z.B. Maske übergeben) und in der
+    # llh_model.signal Funktion können einfach nur alle Werte ausgelesen werden.
     def use_sources(self, src):
         r"""
         Use this function to give a list of sources prior to calculating
@@ -2377,6 +2377,10 @@ class HealpyLLH(PointSourceLLH):
            reconstruction sigma of each event and used as the spatial pdf for
            each event. (dtype is object or numpy.ndarray)
         """
+        # Reset all previously cached values and the map cache
+        self.reset()
+        self.reset_map_cache()
+
         # Sanity checks
         # Check if src recarray has all needed names
         names = ["ra", "dec", "weight", "sigma"]
@@ -2414,11 +2418,12 @@ class HealpyLLH(PointSourceLLH):
         norm_w = norm_w / np.sum(norm_w)
 
         # Cache smoothed llh maps for all exp events if healpy sigma is given
-        print("Healpy maps given as sigma. Start caching of smoothed \n"
-            + "llh maps for every event in exp.\n")
-        # First add weighted maps to create single signal map
-        self._srcs_spatial_pdf_map = self.llh_model._add_weighted_maps(
+        print("Start smoothing new src maps with exp sigma values"
+            + " and store in cache.")
+        # First add weighted maps, then normalize to create one signal pdf map
+        added_map = self.llh_model._add_weighted_maps(
             src["sigma"], norm_w)
+        self._srcs_spatial_pdf_map = amp_hp.norm_healpy_map(added_map)
         # Then convolve with event sigmas from exp to cache values
         self._cached_exp_maps = self.llh_model._convolve_maps(
             self._srcs_spatial_pdf_map, self.exp["sigma"])
@@ -2435,17 +2440,15 @@ class HealpyLLH(PointSourceLLH):
         return
 
 
-    def reset(self):
+    def reset_map_cache(self):
         r"""
-        Reset all cached values.
-        Additionaly reset cached convolved llh maps from src list.
+        Reset all cached src information. Map cache is better decoupled from
+        the PointSourceLLH cache.
         """
-        super(HealpyLLH, self).reset()
-
-        self._src_dict = _src_dict
+        self._src = _src
         self._nsrcs = _nsrcs
         self._cached_exp_maps = _cached_exp_maps
-
+        self.llh_model.reset_map_cache()
         return
 
 

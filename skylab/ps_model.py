@@ -887,6 +887,7 @@ class EnergyLLHfixed(EnergyLLH):
         return
 
 
+
 ##############################################################################
 # New Healpy LLH
 ##############################################################################
@@ -983,7 +984,6 @@ class HealpyLLH(ClassicLLH):
 
 
     # PUBLIC METHODS
-    #### Weiter mit select events. Signal und use source sollten passen
     def signal(self, ev, inj=None, src_map=None):
         r"""
         Spatial probability of event i coming from extended source j.
@@ -1044,12 +1044,12 @@ class HealpyLLH(ClassicLLH):
         return np.array(S)
 
 
-    def reset(self):
+    def reset_map_cache(self):
         r"""
-        Reset all cached values.
+        Reset all cached maps. Map cache is better decoupled from the
+        ClassicLLH cache.
         """
         self._cached_exp_maps = _cached_exp_maps
-
         return
 
 
