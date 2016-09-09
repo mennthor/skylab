@@ -41,7 +41,7 @@ import scipy.stats
 from scipy.signal import convolve2d
 
 # local package imports
-from . import set_pars
+from __init__ import set_pars
 from . import ps_model
 from . import utils
 
@@ -2161,6 +2161,7 @@ class HealpyLLH(PointSourceLLH):
     """
     # Default values for psLLH class. Can be overwritten in constructor
     # by setting the attribute as keyword argument
+    # _mode = "all"
     _src = _src
     _nsrcs = _nsrcs
     _srcs_spatial_pdf_map = _srcs_spatial_pdf_map
@@ -2206,11 +2207,12 @@ class HealpyLLH(PointSourceLLH):
         # Mode is always `all` because with many extended sources, declination
         # bands overlap anyway and event selectiuon gets simpler. Remove it
         # from kwargs and set explivitly to `all`
-        _ = kwargs.pop("mode", "all")
-        mode = "all"
+        # if kwargs.pop("mode", "all") is not "all":
+        #     print("Mode must be all. Setting 'mode' to 'all'.")
+        #     kwargs["mode"] = "all"
 
         super(HealpyLLH, self).__init__(exp, mc, livetime,
-            scramble=scramble, llh_model=llh_model, mode=mode, **kwargs)
+            scramble=scramble, llh_model=llh_model, **kwargs)
 
         return
 
@@ -2241,22 +2243,24 @@ class HealpyLLH(PointSourceLLH):
 
 
     # INTERNAL METHODS
-    def _select_events(self, src_ra, src_dec, **kwargs):
+    def _select_events(self, **kwargs):
         r"""
         Select events around source location(s) used in llh calculation.
         Always select all events (mode='all').
+        Almost no changes here. Just deleted some unneded parts and adapted
+        the signal calculation to the new HealpyLLH signal function.
 
         Parameters
         ----------
-        src_ra src_dec : float, array_like
-            Rightascension and Declination of source(s)
+        No mandatory parameters, always all events from exp are selected.
 
         Other parameters
         ----------------
         scramble : bool
-            Scramble rightascension prior to selection.
+            Scramble rightascension prior to selection. (default: False)
         inject : numpy_structured_array
-            Events to add to the selected events, fields equal to exp. data.
+            Events to add to the selected events, fields equal to exp data.
+            (default: None)
 
         """
         scramble = kwargs.pop("scramble", False)
@@ -2267,16 +2271,10 @@ class HealpyLLH(PointSourceLLH):
         # reset
         self.reset()
 
-        # get the zenith band with correct boundaries
-        dec = (np.pi - 2. * self.delta_ang) / np.pi * src_dec
-        min_dec = max(-np.pi / 2., dec - self.delta_ang)
-        max_dec = min(np.pi / 2., dec + self.delta_ang)
-
-        dPhi = 2. * np.pi
-
-        # number of total events
+        # number of total events, here only exp events.
         self._N = len(self.exp)
 
+        # Mode is always all in HealpyLLH
         if self.mode == "all" :
             # all events are selected
             exp_mask = np.ones_like(self.exp["sinDec"], dtype=np.bool)
@@ -2287,26 +2285,42 @@ class HealpyLLH(PointSourceLLH):
         self._ev = self.exp[exp_mask]
 
         # update rightascension information for scrambled events
+        # Injected events are signal and of course not scrambled :point_up:
         if scramble:
             self._ev["ra"] = self.random.uniform(0., 2. * np.pi,
                                                  size=len(self._ev))
 
+        # Treat _ev and _inj seperately because of the cached exp events
         if inject is not None:
             self._inj = numpy.lib.recfunctions.append_fields(
                 inject, "B", self.llh_model.background(inject), usemask=False)
-
+            # Store seperately how many we inject
             self._n_inj += len(inject)
 
-        # calculate signal term
-        self._ev_S = self.llh_model.signal(src_ra, src_dec, self._ev)
+        # Calculate signal term. Use new HealpyLLH signal term which uses
+        # exp and inj events seperately due to map caching.
+        # _ev_S stores the whole signal values, but is ordered as inj is
+        # appended to ev: S = [ev_S, inj_S].
+        self._ev_S = self.llh_model.signal(
+            self._ev, inj=self._inj, src_map=self._srcs_spatial_pdf_map)
 
         # do not calculate values with signal below threshold
-        ev_mask = self._ev_S > self.thresh_S
+        # Because _ev_S is ordered in ev, inj, use the first len(exp) parts of
+        # the mask for ev (mode is always all) and the other part for inj.
+        # First use the whole mask on all signal values.
+        mask = self._ev_S > self.thresh_S
+        self._ev_S = self._ev_S[mask]
+        # Then split the mask as explained above. The _ev and _inj arrays
+        # SHOULD NOT be used in the signal term after that because the signal
+        # function always expects all events and thus would assign a cached
+        # map wrongly to an event.
+        ev_mask = mask[:len(self.exp)]
+        inj_mask = mask[len(self.exp):]
         self._ev = self._ev[ev_mask]
-        self._ev_S = self._ev_S[ev_mask]
+        self._inj = self._inj[inj_mask]
 
-        # set number of selected events
-        self._n = len(self._ev)
+        # set number of selected events, which is len(ev)+len(inj)=len(ev_S)
+        self._n = len(self._ev_S)
 
         if (self._n < 1
             and (np.sin(self._src_dec) < self.sinDec_range[0]
@@ -2335,21 +2349,23 @@ class HealpyLLH(PointSourceLLH):
         self._llh_model(self.exp, mc, self.livetime, **kwargs)
         return
 
-    # The combined spatial source pdf might be worth looking at from outside
-    @property
-    def srcs_spatial_pdf_map(self):
-        return self._srcs_spatial_pdf_map
-
+    # Mode should not be changed. Always all events are used.
     @property
     def mode(self):
         return self._mode
 
-    # Mode shpuld not be changed. Always all events are used.
-    @PointSourceLLH.mode.setter
+    # @PointSourceLLH.mode.setter
+    @mode.setter
     def mode(self, val):
         if val != "all":
             print("Mode is always 'all' and can't be changed.")
+        self._mode = "all"
         return
+
+    # The combined spatial source pdf might be worth looking at from outside
+    @property
+    def srcs_spatial_pdf_map(self):
+        return self._srcs_spatial_pdf_map
 
 
     # PUBLIC methods
