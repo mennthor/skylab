@@ -900,13 +900,14 @@ class HealpyLLH(ClassicLLH):
     `Astr.Phys.J. 636:680-684, 2006 <http://arxiv.org/abs/astro-ph/0507120>`_.
     The likelihood function from ClassicLLH is extended through
 
-    .. math::    \mathcal{L}=\prod_i\left(
-                        \frac{n_s}{N}\mathcal{S}^\mathrm{tot}
-                       +\left(1-\frac{n_s}{N}\right)\mathcal{B}\right)
+    .. math::
+
+       \mathcal{L} = \prod_i\left(\frac{n_s}{N}\mathcal{S}^\mathrm{tot}
+                     + \left(1-\frac{n_s}{N}\right)\mathcal{B}\right)
 
     with the stacked signal term
 
-    .. math::    \mathcal{S}^{tot} = \frac{\sum W^j R^j S_i^j}{\sum W^j R^j}
+    .. math:: \mathcal{S}^{tot} = \frac{\sum W^j R^j S_i^j}{\sum W^j R^j}
 
     Spatial signal pdfs are described by healpy maps which gets folded with the
     event sigma to create a combined directional pdf for each event.

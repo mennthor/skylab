@@ -2291,11 +2291,13 @@ class HealpyLLH(PointSourceLLH):
                                                  size=len(self._ev))
 
         # Treat _ev and _inj seperately because of the cached exp events
+        # in the llh_model.signal function
         if inject is not None:
-            self._inj = numpy.lib.recfunctions.append_fields(
+            # Just doesn't work with numpy.lib.recfunctions...
+            self._inj = np.lib.recfunctions.append_fields(
                 inject, "B", self.llh_model.background(inject), usemask=False)
-            # Store seperately how many we inject
-            self._n_inj += len(inject)
+            # Store seperately how many injected events were given
+            self._n_inj += len(self._inj)
 
         # Calculate signal term. Use new HealpyLLH signal term which uses
         # exp and inj events seperately due to map caching.
@@ -2304,20 +2306,18 @@ class HealpyLLH(PointSourceLLH):
         self._ev_S = self.llh_model.signal(
             self._ev, inj=self._inj, src_map=self._srcs_spatial_pdf_map)
 
+        # Now we can put _inj and exp in one array.
+        # Only if using the signal function we need to distinguish
+        if inject is not None:
+            self._ev = np.append(self._ev, self._inj)
+
         # do not calculate values with signal below threshold
         # Because _ev_S is ordered in ev, inj, use the first len(exp) parts of
         # the mask for ev (mode is always all) and the other part for inj.
         # First use the whole mask on all signal values.
         mask = self._ev_S > self.thresh_S
         self._ev_S = self._ev_S[mask]
-        # Then split the mask as explained above. The _ev and _inj arrays
-        # SHOULD NOT be used in the signal term after that because the signal
-        # function always expects all events and thus would assign a cached
-        # map wrongly to an event.
-        ev_mask = mask[:len(self.exp)]
-        inj_mask = mask[len(self.exp):]
-        self._ev = self._ev[ev_mask]
-        self._inj = self._inj[inj_mask]
+        self._ev = self._ev[mask]
 
         # set number of selected events, which is len(ev)+len(inj)=len(ev_S)
         self._n = len(self._ev_S)
@@ -2468,7 +2468,169 @@ class HealpyLLH(PointSourceLLH):
         return
 
 
-    # TODOs
+    def llh(self, **fit_pars):
+        r"""
+        Calculate the likelihood ratio for the selected events.
+        This method is the super method, but explicitly overriden to add a bit
+        more documentation and explanation.
+
+        Stacking Likelihood only differs in summation of the signal term,
+        everything else is the same.
+        The expression used here is the llh ratio test statistic
+        :math:`\log\Lambda`, as can be seen in the following:
+
+        .. math::
+
+           \log\Lambda  &= \sum_i\log\left(\frac{n_S}{N}\left(\frac{w S}{B}
+                           - 1\right) + 1\right) \\
+                        &= \sum_i\log\left( \frac{n_S}{N}\cdot \frac{w S}{B} +
+                           1 - \frac{n_S}{N} \right) \\
+                        &= \sum_i\log\left[\left( \frac{n_S}{N}\cdot w S +
+                           \left(1-\frac{n_S}{N}\right)B \right) / B \right] \\
+                        &= \sum_i\log\left( \frac{n_S}{N}\cdot w S + \left(
+                           1-\frac{n_S}{N}\right)B\right)-\log\left(B\right) \\
+                        &= \sum_i\log\left(\mathcal{L}_1(S,B)\right) -
+                           \log\left( \mathcal{L}_0(S=0,B) \right) \\
+           \Rightarrow \Lambda &= \prod_i
+                           \frac{\mathcal{L}_1(S,B)}{\mathcal{L}_0(S=0,B)}
+
+        For stacking, we simply replace the single signal values with the
+        stacked total signal values per event, as stated in the HealpyLLH model
+
+        .. math:: \mathcal{S}^{tot} = \frac{\sum W^j R^j S_i^j}{\sum W^j R^j}
+
+        Note: For some values near log10(0) the llh diverges. This
+              implementation makes use of the np.log1p(x) = np.log10(x+1)
+              function and explicitly uses a tayler expansion of the llh near
+              the divergence to return valid values in this regime.
+
+
+        Parameters
+        ----------
+        fit_pars : dict
+            Dictionary with all fit parameters, nsources and everything
+            defined by `llh_model`. If no weights are given in `llh_model`,
+            the only key needed is 'nsources' which is the spatial fit
+            parameter of the llh. The values of the llh function can
+
+        Returns
+        -------
+        funval : float
+            Function value of the llh at the given fit_pars.
+        grad : array_like
+            Gradient of the llh function at funval.
+        """
+        LogLambda, grad = super(HealpyLLH, self).llh(**fit_pars)
+
+        return LogLambda, grad
+
+
+    def fit_source(self, **kwargs):
+        r"""
+        Minimize the negative log-Likelihood with current src setup.
+
+        Here only slightly adapted to use the new _select_events method.
+
+        Parameters
+        ----------
+        No mandatory parameters, always all events from exp are selected.
+
+        Returns
+        -------
+        fmin : float
+            Minimal function value turned into test statistic
+            -sign(ns)*logLambda
+        xmin : dict
+            Parameters minimising the likelihood ratio.
+
+        Other parameters
+        ----------------
+        scramble : bool
+            Scramble events prior to selection. Passed to _select_events.
+
+        inject
+            Source injector. Passed to _select_events.
+
+        kwargs
+            Parameters passed to the L-BFGS-B minimiser.
+
+        """
+        # wrap llh function to work with arrays
+        def _llh(x, *args):
+            """Scale likelihood variables so that they are both normalized.
+            Returns -logLambda which is the test statistic and should
+            be distributed with a chi2 distribution assuming the null
+            hypothesis is true.
+
+            """
+
+            fit_pars = dict([(par, xi) for par, xi in zip(self.params, x)])
+
+            fun, grad = self.llh(**fit_pars)
+
+            # return negative value needed for minimization
+            return -fun, -grad
+
+        scramble = kwargs.pop("scramble", False)
+        inject = kwargs.pop("inject", None)
+        kwargs.setdefault("pgtol", _pgtol)
+
+        # Set all weights once for this src location, if not already cached
+        self._select_events(inject=inject, scramble=scramble)
+
+        if self._N < 1:
+            # No events selected
+            return 0., dict([(par, par_s) if not par == "nsources" else (par, 0.)
+                             for par, par_s in zip(self.params, self.par_seeds)])
+
+        # get seeds
+        pars = self.par_seeds
+        inds = [i for i, par in enumerate(self.params) if par in kwargs]
+        pars[inds] = np.array([kwargs.pop(par) for par in self.params
+                                               if par in kwargs])
+
+        # minimizer setup
+        xmin, fmin, min_dict = scipy.optimize.fmin_l_bfgs_b(
+            _llh, pars, bounds=self.par_bounds, **kwargs)
+
+        # set up mindict to enter while, exit if fit looks nice
+        i = 0
+        min_dict = dict(warnflag=0, task="FACTR")
+        while min_dict["warnflag"] == 0 and "FACTR" in min_dict["task"]:
+            # no stop due to gradient
+            xmin, fmin, min_dict = scipy.optimize.fmin_l_bfgs_b(
+                                    _llh, pars,
+                                    bounds=self.par_bounds,
+                                    **kwargs)
+            pars[0] = self.random.uniform(0., 2. * pars[0])
+            if i > 100:
+                raise RuntimeError("Did not manage good fit")
+
+        if fmin > 0 and (self.par_bounds[0][0] <= 0
+                         and self.par_bounds[0][1] >= 0):
+            # null hypothesis is part of minimisation, fit should be negative
+            if abs(fmin) > kwargs["pgtol"]:
+                # SPAM only if the distance is large
+                logger.error("Fitter returned positive value, "
+                             "force to be zero at null-hypothesis. "
+                             "Minimum found {0} with fmin {1}".format(
+                                 xmin, fmin))
+            fmin = 0
+            xmin[0] = 0.
+
+        if self._N > 0 and abs(xmin[0]) > _rho_max * self._n:
+            logger.error(("nsources > {0:7.2%} * {1:6d} selected events, "
+                          "fit-value nsources = {2:8.1f}").format(
+                              _rho_max, self._n, xmin[0]))
+
+        xmin = dict([(par, xi) for par, xi in zip(self.params, xmin)])
+
+        # Separate over and underfluctuations
+        fmin *= -np.sign(xmin["nsources"])
+
+        return fmin, xmin
+
+
     def do_trials(self, src_ra, src_dec, **kwargs):
         r"""Calculation of scrambled trials.
 
@@ -2517,9 +2679,19 @@ class HealpyLLH(PointSourceLLH):
                           + [("seed", self.random.randint(2**32))]))
                     for sam in samples]
 
+            # Extremely hacky at the moment. Overwrite fs() locally to adapt
+            # _select_events function
+            def fs_loc(args):
+                llh, ra, dec, inject, scramble, kwargs = args
+                if scramble:
+                    llh.seed = kwargs.pop("seed")
+
+                return llh.fit_source(
+                    inject=inject, scramble=scramble, **kwargs)
+
             pool = multiprocessing.Pool(self.ncpu)
 
-            result = pool.map(fs, args)
+            result = pool.map(fs_loc, args)
 
             pool.close()
             pool.join()
@@ -2527,8 +2699,7 @@ class HealpyLLH(PointSourceLLH):
             del pool
 
         else:
-            result = [self.fit_source(src_ra, src_dec, inject=sam,
-                                      scramble=True, **kwargs)
+            result = [self.fit_source(inject=sam, scramble=True, **kwargs)
                       for sam in samples]
 
         for i, res in enumerate(result):
@@ -2538,283 +2709,7 @@ class HealpyLLH(PointSourceLLH):
 
         return trials
 
-    def llh(self, **fit_pars):
-        r"""Calculate the likelihood ratio for the selected events.
-
-        Evaluate pointsource likelihood using cached values. For new input,
-        values are re-evaluated and cached.
-
-        .. math:: \log\Lambda=\sum_i\log\left(
-                  \frac{n_s}{N}\left(\frac{\mathcal{S}}{\mathcal{B}}w-1\right)
-                                     +1\right)
-
-        Parameters
-        ----------
-        fit_pars : dict
-            Dictionary with all fit parameters, nsources and all defined by
-            `llh_model`.
-
-        Returns
-        -------
-        funval : float
-            Function value
-        grad : array_like
-            Gradient at the point.
-        """
-
-        nsources = fit_pars.pop("nsources")
-
-        N = self._N
-        n = self._n
-
-        assert(n == len(self._ev))
-
-        SoB = self._ev_S / self._ev["B"]
-
-        w, grad_w = self.llh_model.weight(self._ev, **fit_pars)
-
-        x = (SoB * w - 1.) / N
-
-        # check which sums of the likelihood are close to the divergence
-        aval = -1. + _aval
-        alpha = nsources * x
-
-        # select events close to divergence
-        xmask = alpha > aval
-
-        # function value, log1p for OK, otherwise quadratic taylor
-        funval = np.empty_like(alpha, dtype=np.float)
-        funval[xmask] = np.log1p(alpha[xmask])
-        funval[~xmask] = (np.log1p(aval)
-                      + 1. / (1.+aval) * (alpha[~xmask] - aval)
-                      - 1./2./(1.+aval)**2 * (alpha[~xmask]-aval)**2)
-        funval = funval.sum()
-        if N > n:
-            funval += (N - n) * np.log1p(-nsources / N)
-
-        # gradients
-
-        # in likelihood function
-        ns_grad = np.empty_like(alpha, dtype=np.float)
-        ns_grad[xmask] = x[xmask] / (1. + alpha[xmask])
-        ns_grad[~xmask] = (x[~xmask] / (1. + aval)
-                       - x[~xmask] * (alpha[~xmask] - aval) / (1. + aval)**2)
-        ns_grad = ns_grad.sum()
-        if N > n:
-            ns_grad -= (N - n) / (N - nsources)
-
-        # in weights
-        if grad_w is not None:
-            par_grad = 1. / N * SoB * grad_w
-
-            par_grad[:, xmask] *= nsources / (1. + alpha[xmask])
-            par_grad[:, ~xmask] *= (nsources / (1. + aval)
-                                    - nsources * (alpha[~xmask] - aval)
-                                        / (1. + aval)**2)
-
-            par_grad = par_grad.sum(axis=-1)
-
-        else:
-            par_grad = np.zeros((0,))
-
-        grad = np.append(ns_grad, par_grad)
-
-        # multiply by two for chi2 distributed test-statistic
-        LogLambda = 2. * funval
-        grad = 2. * grad
-
-        return LogLambda, grad
-
-    def fit_source(self, src_ra, src_dec, **kwargs):
-        """Minimize the negative log-Likelihood at source position(s).
-
-        Parameters
-        ----------
-        src_ra src_dec : array_like
-            Source position(s).
-
-        Returns
-        -------
-        fmin : float
-            Minimal function value turned into test statistic
-            -sign(ns)*logLambda
-        xmin : dict
-            Parameters minimising the likelihood ratio.
-
-        Other parameters
-        ----------------
-        scramble : bool
-            Scramble events prior to selection.
-
-        inject
-            Source injector
-
-        kwargs
-            Parameters passed to the L-BFGS-B minimiser.
-
-        """
-
-        # wrap llh function to work with arrays
-        def _llh(x, *args):
-            """Scale likelihood variables so that they are both normalized.
-            Returns -logLambda which is the test statistic and should
-            be distributed with a chi2 distribution assuming the null
-            hypothesis is true.
-
-            """
-
-            fit_pars = dict([(par, xi) for par, xi in zip(self.params, x)])
-
-            fun, grad = self.llh(**fit_pars)
-
-            # return negative value needed for minimization
-            return -fun, -grad
-
-        scramble = kwargs.pop("scramble", False)
-        inject = kwargs.pop("inject", None)
-        kwargs.setdefault("pgtol", _pgtol)
-
-        # Set all weights once for this src location, if not already cached
-        self._select_events(src_ra, src_dec, inject=inject, scramble=scramble)
-
-        if self._N < 1:
-            # No events selected
-            return 0., dict([(par, par_s) if not par == "nsources" else (par, 0.)
-                             for par, par_s in zip(self.params, self.par_seeds)])
-
-        # get seeds
-        pars = self.par_seeds
-        inds = [i for i, par in enumerate(self.params) if par in kwargs]
-        pars[inds] = np.array([kwargs.pop(par) for par in self.params
-                                               if par in kwargs])
-
-        # minimizer setup
-        xmin, fmin, min_dict = scipy.optimize.fmin_l_bfgs_b(
-                                _llh, pars,
-                                bounds=self.par_bounds,
-                                **kwargs)
-
-        # set up mindict to enter while, exit if fit looks nice
-        i = 0
-        min_dict = dict(warnflag=0, task="FACTR")
-        while min_dict["warnflag"] == 0 and "FACTR" in min_dict["task"]:
-            # no stop due to gradient
-            xmin, fmin, min_dict = scipy.optimize.fmin_l_bfgs_b(
-                                    _llh, pars,
-                                    bounds=self.par_bounds,
-                                    **kwargs)
-            pars[0] = self.random.uniform(0., 2. * pars[0])
-            if i > 100:
-                raise RuntimeError("Did not manage good fit")
-
-        if fmin > 0 and (self.par_bounds[0][0] <= 0
-                         and self.par_bounds[0][1] >= 0):
-            # null hypothesis is part of minimisation, fit should be negative
-            if abs(fmin) > kwargs["pgtol"]:
-                # SPAM only if the distance is large
-                logger.error("Fitter returned positive value, "
-                             "force to be zero at null-hypothesis. "
-                             "Minimum found {0} with fmin {1}".format(
-                                 xmin, fmin))
-            fmin = 0
-            xmin[0] = 0.
-
-        if self._N > 0 and abs(xmin[0]) > _rho_max * self._n:
-            logger.error(("nsources > {0:7.2%} * {1:6d} selected events, "
-                          "fit-value nsources = {2:8.1f}").format(
-                              _rho_max, self._n, xmin[0]))
-
-        xmin = dict([(par, xi) for par, xi in zip(self.params, xmin)])
-
-        # Separate over and underfluctuations
-        fmin *= -np.sign(xmin["nsources"])
-
-        return fmin, xmin
-
-    def fit_source_loc(self, src_ra, src_dec, size, seed, **kwargs):
-        """Minimize the negative log-Likelihood around interesting position.
-
-        Parameters
-        ----------
-        src_ra src_dec : array_like
-            Source position(s).
-
-        size : float
-            Size of the box for minimisation
-
-        seed : dictionary
-            Best seed for region
-
-        Returns
-        -------
-        fmin : float
-            Minimal function value turned into test statistic
-            -sign(ns)*logLambda
-        xmin : dict
-            Parameters minimising the likelihood ratio.
-
-        Other parameters
-        ----------------
-        kwargs
-            Parameters passed to the L-BFGS-B minimiser.
-
-        """
-
-        # wrap llh function to work with arrays
-        def _llh(x, *args):
-            """Scale likelihood variables so that they are both normalized.
-            Returns -logLambda which is the test statistic and should
-            be distributed with a chi2 distribution assuming the null
-            hypothesis is true.
-
-            """
-
-            # check if new source selection has to be done
-            if not (x[0] == self._src_ra and x[1] == self._src_dec):
-                self._select_events(x[0], x[1])
-
-            # forget about source position
-            x = x[2:]
-
-            fit_pars = dict([(par, xi) for par, xi in zip(self.params, x)])
-
-            fun, grad = self.llh(**fit_pars)
-
-            # return negative value needed for minimization
-            return -fun
-
-        if "scramble" in kwargs:
-            raise ValueError("No scrambling of events allowed fit_source_loc")
-        if "approx_grad" in kwargs and not kwargs["approx_grad"]:
-            raise ValueError("Cannot use gradients for location scan")
-
-        kwargs.pop("approx_grad", None)
-
-        kwargs.setdefault("pgtol", _pgtol)
-
-        loc_bound = [[max(0., src_ra - size / np.cos(src_dec)),
-                      min(2. * np.pi, src_ra + size / np.cos(src_dec))],
-                     [src_dec - size, src_dec + size]]
-        pars = [src_ra, src_dec] + [seed[par] for par in self.params]
-        bounds = np.vstack([loc_bound, self.par_bounds])
-
-        xmin, fmin, min_dict = scipy.optimize.fmin_l_bfgs_b(
-                                _llh, pars, bounds=bounds,
-                                approx_grad=True, **kwargs)
-
-        if self._N > 0 and abs(xmin[0]) > _rho_max * self._n:
-            logger.error(("nsources > {0:7.2%} * {1:6d} selected events, "
-                          "fit-value nsources = {2:8.1f}").format(
-                              _rho_max, self._n, xmin[0]))
-
-        xmin = dict([("ra", xmin[0]), ("dec", xmin[1])]
-                    + [(par, xi) for par, xi in zip(self.params, xmin[2:])])
-
-        # Separate over and underfluctuations
-        fmin *= -np.sign(xmin["nsources"])
-
-        return fmin, xmin
-
+    # TODO
     def weighted_sensitivity(self, src_ra, src_dec, alpha, beta, inj, mc, **kwargs):
         """Calculate the point source sensitivity for a given source
         hypothesis using weights.
@@ -3114,140 +3009,3 @@ class HealpyLLH(PointSourceLLH):
 
         return result
 
-    def window_scan(self, src_ra, src_dec, width, **kwargs):
-        r"""Do a rectangular scan around a position with fine binning.
-
-        Parameters
-        -----------
-        src_ra, src_dec : float
-            Rightascension and declination position of window center in rad.
-
-        width : float
-            Window size in rad.
-
-        Returns
-        --------
-        result : ndarray
-            Array of all gridpoints with source result.
-
-        Other Parameters
-        -----------------
-
-        npoints : int
-            Number of points to scan per dimension.
-
-        xmin : np.recarray
-            One seed or a healpy map with all seeds that is used for
-            interpolation.
-
-        """
-
-        npoints = kwargs.pop("npoints", _win_points)
-        pVal = kwargs.pop("pVal", _pVal)
-        xmin = kwargs.pop("xmin", None)
-
-        # get only interesting seeds not close to boundaries
-        seed_bounds = dict([(par, (np.mean(bound) - _b_eps*np.diff(bound)/2.,
-                                   np.mean(bound) + _b_eps*np.diff(bound)/2.))
-                                if not par == "nsources"
-                                else (par, np.array([0., np.inf]))
-                            for par, bound in zip(self.params,
-                                                  self.par_bounds)])
-
-        out_print = self._out_print
-
-        # create grid
-        d_ra, dec = np.meshgrid(np.linspace(-width/2., width/2., npoints),
-                                np.linspace(-width/2., width/2., npoints))
-
-        # shift window to center location
-        dec += src_dec
-
-        # adjust for curvature
-        d_ra /= np.cos(dec)
-
-        ra = src_ra + d_ra
-        # adjust for periodicity
-        mlow = ra < 0.
-        mhigh = ra > 2. * np.pi
-        ra[mlow] += 2. * np.pi
-        ra[mhigh] -= 2. * np.pi
-
-        MIN = np.empty_like(ra.ravel(),
-                            dtype=[("TS", np.float), ("pVal", np.float)]
-                                  + [(par, np.float) for par in self.params])
-
-        SEED = np.empty_like(ra.ravel(),
-                             dtype=[(par, np.float) for par in self.params])
-
-        # create grid with seeds for all points
-        if xmin is None:
-            # zero seed will be ignored
-            SEED = np.zeros_like(SEED)
-        elif hasattr(xmin, "__getitem__") and hp.pixelfunc.isnpixok(len(xmin)):
-            # healpy map with seeds
-            for par in self.params:
-                SEED[par] = hp.pixelfunc.get_interp_val(xmin[par],
-                                                        np.pi/2. - dec.ravel(),
-                                                        ra.ravel())
-        else:
-            for par in self.params:
-                SEED[par] = xmin[par] * np.ones_like(ra.ravel(),
-                                                     dtype=np.float)
-
-        start = time.time()
-        n = 0
-        n_iters = len(ra.ravel())
-        for i, (r, d, s) in enumerate(zip(ra.ravel(), dec.ravel(), SEED)):
-            if d < -np.pi/2. or d > np.pi/2.:
-                for key in MIN.dtype.names:
-                    MIN[key][i] = np.nan
-                continue
-
-            # collect all neighbouring completed fits in 2d-grid
-            inds = []
-            if i % npoints > 0:
-                inds.append(i - 1)
-            if i > npoints - 1:
-                inds.append(i - npoints)
-                inds.append(i - npoints + 1)
-            if i % npoints > 0 and i > npoints - 1:
-                inds.append(i - npoints - 1)
-            inds = np.array(np.unique(inds), dtype=np.int)
-            if len(inds) > 0 and np.any(MIN[inds]["nsources"] > _min_ns):
-                best_ind = inds[np.argmax(MIN[inds]["pVal"])]
-                s = numpy.lib.recfunctions.drop_fields(MIN, ["TS", "pVal"],
-                                                       usemask=False)[best_ind]
-
-            seed = dict([(key, s[key]) for key in s.dtype.names
-                                       if s["nsources"] > _min_ns
-                                       and seed_bounds[key][0]
-                                             < s[key] < seed_bounds[key][1]]
-                                       )
-
-            MIN["TS"][i], xmin = self.fit_source(r, d, **seed)
-            MIN["pVal"][i] = pVal(MIN["TS"][i], np.sin(d))
-            for key, val in xmin.iteritems():
-                MIN[key][i] = val
-
-            # report output
-            if float(n)/n_iters > out_print:
-                stop = time.time()
-                mins, secs = divmod(stop - start, 60)
-                print(("\t{0:7.2%} after {1:2.0f}' {2:4.1f}'' "
-                       "({3:8d} of {4:8d})").format(
-                        float(n)/n_iters, mins, secs, n, n_iters))
-                out_print += 0.1
-
-            n += 1
-
-        ra[mlow] -= 2. * np.pi
-        ra[mhigh] += 2. * np.pi
-
-        MIN = numpy.lib.recfunctions.append_fields(MIN, ["ra", "dec", "x"],
-                                                   [ra, dec,
-                                                    ra-(1.-np.cos(dec))*d_ra],
-                                                   usemask=False)
-        MIN = MIN.reshape(ra.shape)
-
-        return MIN
