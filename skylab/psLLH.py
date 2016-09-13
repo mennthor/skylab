@@ -108,7 +108,7 @@ _win_points = 50
 # HealpyLLH variable defaults
 _src = None
 _nsrcs = 0
-_srcs_spatial_pdf_map = None
+_spatial_pdf_map = None
 _cached_maps = None
 ##############################################################################
 
@@ -300,15 +300,19 @@ class PointSourceLLH(object):
 
         # store exp data, add sinDec information if not available
         self.exp = exp
+        ######################################################################
+        ## Make private for HealpyLLh
+        self.mc = mc
 
         if not "sinDec" in self.exp.dtype.fields:
             self.exp = numpy.lib.recfunctions.append_fields(
                     self.exp, "sinDec", np.sin(self.exp["dec"]),
                     dtypes=np.float, usemask=False)
         if not "sinDec" in mc.dtype.fields:
-            mc = numpy.lib.recfunctions.append_fields(
+            self.mc = numpy.lib.recfunctions.append_fields(
                     mc, "sinDec", np.sin(mc["dec"]),
                     dtypes=np.float, usemask=False)
+        ######################################################################
 
         # Experimental data values
         self.livetime = livetime
@@ -2172,6 +2176,8 @@ class HealpyLLH(object):
         """
         self.llh_model = kwargs.pop("llh_model", ps_model.HealpyLLH())
         kwargs["llh_model"] = self.llh_model
+
+        self._mc = mc
 
         super(HealpyLLH, self).__init__(
             exp, mc, livetime, scramble, upscale, **kwargs)
