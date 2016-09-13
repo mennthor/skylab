@@ -25,11 +25,13 @@ _N = 0
     _N = _N
     _cached_maps = _cached_maps
 
-
-    def __call__(self, exp, mc, livetime, src, **kwargs):
+    # INTERNAL METHODS
+    def _cache_maps(self, exp, mc, src):
         r"""
-        Cache maps before calling the super class.
+        Cache maps for fast signal calculation.
 
+        exp, mc : record arrays
+            Data, MC from psLLH.
         src : record array
             Record array containing the source information. Needed fields are
             sigma : array
@@ -41,17 +43,16 @@ _N = 0
         """
         # The first _N maps are always exp maps
         self._N = len(exp)
+
         # Cache maps with every exp/mc event sigma
         added_map = self._add_weighted_maps(src["sigma"], src["normw"])
         sigma = np.append(exp["sigma"], mc["sigma"])
         logger.info("Start caching exp and mc maps. This may take a while.")
         self.cached_maps = self._convolve_maps(added_map, sigma)
-        # Do the rest in the super class
-        super(HealpyLLH, self).__call__(exp, mc, livetime, **kwargs)
+        logger.info("Done caching exp and mc maps.")
+
         return
 
-
-    # INTERNAL METHODS
     def _convolve_maps(self, m, sigma):
         """
         This function does:
