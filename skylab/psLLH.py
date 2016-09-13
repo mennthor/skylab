@@ -2176,13 +2176,30 @@ class HealpyLLH(object):
             exp, mc, livetime, scramble, upscale, **kwargs)
         return
 
-    def __str__(self):
+    def __str__(self, verb=False):
         r"""
-        String representation of HealpyLLH. Just adding src information.
+        String representation of class.
+
+        Just added information about the given sources. Print super info with
+        `print(class_obj.__str__(verb=True))`
         """
-        sout = super(HealpyLLH, self).__str__() + "\n"
-        sout += "HealpyLLH"
+        if verb:
+            sout = super(HealpyLLH, self).__str__() + "\n"
+        else:
+            sout = ""
+
+        # Just add src list information
+        if self._src is None:
+            sout += "src list : no srcs given yet.\n"
+        else:
+            sout += "src list : {} srcs given\n".format(self._nsrcs)
+            sout += "    DECs         : {}\n".format(self._src["dec"])
+            sout += "    RAs          : {}\n".format(self._src["ra"])
+            sout += "    src. wghts   : {}\n".format(self._src["weight"])
+            sout += "    det. wghts   : {}\n".format(self._src["decw"])
+            sout += "    normed w_tot : {}\n".format(self._src["normw"])
         sout += 67 * "-" + "\n"
+
         return sout
 
 
@@ -2314,6 +2331,9 @@ class HealpyLLH(object):
     #     self._mode = val
     #     self.reset()
     #     return
+
+    # Set the source array and update the llh_model
+
 
     # If someone wants to view the combinded spatial source map
     @property
@@ -2583,7 +2603,6 @@ class HealpyLLH(object):
         fmin *= -np.sign(xmin["nsources"])
 
         return fmin, xmin
-
 
     def weighted_sensitivity(self, src_ra, src_dec, alpha, beta, inj, mc, **kwargs):
         """Calculate the point source sensitivity for a given source
@@ -2884,7 +2903,8 @@ class HealpyLLH(object):
 
         return result
 
-    # Not implemented in a stacked search.
+
+    # NOT IMPLEMENTED in a stacked search.
     def all_sky_scan(self, **kwargs):
         r"""
         Not implemented for a stacked search.
