@@ -1,8 +1,9 @@
 
 ##############################################################################
 ## HealpyLLH variable defaults
-_cached_maps = None
 _N = 0
+_spatial_pdf_map = None
+_cached_maps = None
 ##############################################################################
     The signal pdf gets modified according to the stacking ansatz described in
     `Astr.Phys.J. 636:680-684, 2006 <http://arxiv.org/abs/astro-ph/0507120>`_.
@@ -23,6 +24,7 @@ _N = 0
     # Default values for HealpyLLH class. Can be overwritten in constructor
     # by setting the attribute as keyword argument
     _N = _N
+    _spatial_pdf_map = _spatial_pdf_map
     _cached_maps = _cached_maps
 
     # INTERNAL METHODS
@@ -44,10 +46,13 @@ _N = 0
         # The first _N maps are always exp maps
         self._N = len(exp)
 
-        # Cache maps with every exp/mc event sigma
+        # First make single source spatial pdf by adding weighted maps
         added_map = self._add_weighted_maps(src["sigma"], src["normw"])
-        sigma = np.append(exp["sigma"], mc["sigma"])
+        self._spatial_pdf_map = amp_hp.norm_healpy_map(added_map)
+
+        # Cache maps with every exp/mc event sigma
         logger.info("Start caching exp and mc maps. This may take a while.")
+        sigma = np.append(exp["sigma"], mc["sigma"])
         self.cached_maps = self._convolve_maps(added_map, sigma)
         logger.info("Done caching exp and mc maps.")
 
