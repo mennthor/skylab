@@ -2586,89 +2586,6 @@ class HealpyLLH(object):
 
         return fmin, xmin
 
-    def fit_source_loc(self, src_ra, src_dec, size, seed, **kwargs):
-        """Minimize the negative log-Likelihood around interesting position.
-
-        Parameters
-        ----------
-        src_ra src_dec : array_like
-            Source position(s).
-
-        size : float
-            Size of the box for minimisation
-
-        seed : dictionary
-            Best seed for region
-
-        Returns
-        -------
-        fmin : float
-            Minimal function value turned into test statistic
-            -sign(ns)*logLambda
-        xmin : dict
-            Parameters minimising the likelihood ratio.
-
-        Other parameters
-        ----------------
-        kwargs
-            Parameters passed to the L-BFGS-B minimiser.
-
-        """
-
-        # wrap llh function to work with arrays
-        def _llh(x, *args):
-            """Scale likelihood variables so that they are both normalized.
-            Returns -logLambda which is the test statistic and should
-            be distributed with a chi2 distribution assuming the null
-            hypothesis is true.
-
-            """
-
-            # check if new source selection has to be done
-            if not (x[0] == self._src_ra and x[1] == self._src_dec):
-                self._select_events(x[0], x[1])
-
-            # forget about source position
-            x = x[2:]
-
-            fit_pars = dict([(par, xi) for par, xi in zip(self.params, x)])
-
-            fun, grad = self.llh(**fit_pars)
-
-            # return negative value needed for minimization
-            return -fun
-
-        if "scramble" in kwargs:
-            raise ValueError("No scrambling of events allowed fit_source_loc")
-        if "approx_grad" in kwargs and not kwargs["approx_grad"]:
-            raise ValueError("Cannot use gradients for location scan")
-
-        kwargs.pop("approx_grad", None)
-
-        kwargs.setdefault("pgtol", _pgtol)
-
-        loc_bound = [[max(0., src_ra - size / np.cos(src_dec)),
-                      min(2. * np.pi, src_ra + size / np.cos(src_dec))],
-                     [src_dec - size, src_dec + size]]
-        pars = [src_ra, src_dec] + [seed[par] for par in self.params]
-        bounds = np.vstack([loc_bound, self.par_bounds])
-
-        xmin, fmin, min_dict = scipy.optimize.fmin_l_bfgs_b(
-                                _llh, pars, bounds=bounds,
-                                approx_grad=True, **kwargs)
-
-        if self._N > 0 and abs(xmin[0]) > _rho_max * self._n:
-            logger.error(("nsources > {0:7.2%} * {1:6d} selected events, "
-                          "fit-value nsources = {2:8.1f}").format(
-                              _rho_max, self._n, xmin[0]))
-
-        xmin = dict([("ra", xmin[0]), ("dec", xmin[1])]
-                    + [(par, xi) for par, xi in zip(self.params, xmin[2:])])
-
-        # Separate over and underfluctuations
-        fmin *= -np.sign(xmin["nsources"])
-
-        return fmin, xmin
 
     def weighted_sensitivity(self, src_ra, src_dec, alpha, beta, inj, mc, **kwargs):
         """Calculate the point source sensitivity for a given source
@@ -2984,5 +2901,13 @@ class HealpyLLH(object):
         """
         raise NotImplementedError(
             "`window_scan` is not used in a stacked search.")
+        return
+
+    def fit_source_loc(self, src_ra, src_dec, size, seed, **kwargs):
+        r"""
+        Not implemented for a stacked search.
+        """
+        raise NotImplementedError(
+            "`fit_source_loc` is not used in a stacked search.")
         return
 
