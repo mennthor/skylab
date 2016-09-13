@@ -1594,7 +1594,7 @@ class PointSourceLLH(object):
                     else:
                         print("Fit delta chi2 to background scrambles")
                         fitfun = utils.delta_chi2
-                    fit = fitfun(trials["TS"][trials["n_inj"] == 0], df=2.,
+                    fit = fitfun(trials["TS"][trials["n_inj"] == 0],
                                  floc=0., fscale=1.)
 
                     # give information about the fit
@@ -2172,8 +2172,10 @@ class HealpyLLH(object):
         """
         self.llh_model = kwargs.pop("llh_model", ps_model.HealpyLLH())
         kwargs["llh_model"] = self.llh_model
+
         super(HealpyLLH, self).__init__(
             exp, mc, livetime, scramble, upscale, **kwargs)
+
         return
 
     def __str__(self, verb=False):
@@ -2332,8 +2334,6 @@ class HealpyLLH(object):
     #     self.reset()
     #     return
 
-    # Set the source array and update the llh_model
-
 
     # If someone wants to view the combinded spatial source map
     @property
@@ -2342,6 +2342,97 @@ class HealpyLLH(object):
 
 
     # PUBLIC methods
+    def _use_sources(self, src, exp, mc):
+        r"""
+        Use this function to give a list of sources prior to calculating
+        anything. This is different to the standard PointSourceLLH in which
+        each function gets a single source in the argument.
+        Here we use this way to cache time intensive healpy map smoothing
+        beforehand.
+
+        Parameters
+        ----------
+        src is a numpy record array with the following fields:
+            ra, dec: array
+                 Position of the sources in equatorial coordinates.
+            weight : array
+                Theoretical (or intrinsic) weight for each source.
+            sigma : array
+               List of healpy maps. The maps are convolved with a gaussian with
+               the reconstruction sigma of each event and used as the spatial
+               pdf for each event. (dtype is object or numpy.ndarray)
+        """
+        # Reset all previously cached values and the map cache
+        self.reset()
+        self.reset_map_cache()
+
+        # Sanity checks
+        # Check if src recarray has all needed names
+        names = ["ra", "dec", "weight", "sigma"]
+        if not all (k in src.dtype.names for k in names):
+            raise KeyError(
+                "src array must have names 'ra', 'dec', 'weight' and 'sigma'")
+
+        # Check if sigma field contains valid healpy maps
+        if not hp.maptype(src["sigma"]) > 0:
+            raise ValueError("Healpy maps in 'sigma' field not valid.")
+
+        # Check if coordinates are valid equatorial coordinates in radians
+        if np.any(src["ra"] < 0) or np.any(src["ra"] > 2*np.pi):
+            raise ValueError("RA value(s) not valid equatorial coordinates")
+        if np.any(src["dec"] < -np.pi/2.) or np.any(src["dec"] > +np.pi/2.):
+            raise ValueError("DEC value(s) not valid equatorial coordinates")
+
+        # Zero weight makes no sense
+        if np.any(src["weight"] <= 0):
+            raise ValueError("Source weight(s) <= 0 detected.")
+        # End of sanity checks
+
+        # Get number of sources
+        self._nsrcs = len(src)
+
+        # Get src detector weight from BG spline -> Detector exposition
+        # for every src position. Background expects recarray with field
+        # 'sinDec' so create it first
+        src_sin_dec = np.zeros((self._nsrcs, ), dtype=[("sinDec", np.float)])
+        src_sin_dec["sinDec"] = np.sin(src["dec"])
+        src_dec_w = self.llh_model.background(src_sin_dec)
+
+        # Normalize weights: Total = (Acceptance * Theoretical Weight) / Sum
+        norm_w = src_dec_w * src["weight"]
+        norm_w = norm_w / np.sum(norm_w)
+
+        # Cache smoothed llh maps for all exp events if healpy sigma is given
+        self.llh_model._cache_maps(self.exp, mc, src)
+
+
+
+
+
+
+
+        print("Start smoothing new src maps with exp sigma values"
+            + " and store in cache.")
+        # First add weighted maps, then normalize to create one signal pdf map
+        added_map = self.llh_model._add_weighted_maps(
+            src["sigma"], norm_w)
+        self._srcs_spatial_pdf_map = amp_hp.norm_healpy_map(added_map)
+        # Then convolve with event sigmas from exp to cache values
+        self._cached_exp_maps = self.llh_model._convolve_maps(
+            self._srcs_spatial_pdf_map, self.exp["sigma"])
+        # Give the llh_model the cached exp maps for the signal function
+        self.llh_model._cached_exp_maps = self._cached_exp_maps
+
+        # Add norm. total weights and detector decl. weights for later use
+        src = np.lib.recfunctions.append_fields(
+            src, "normw", norm_w, dtypes=np.float, usemask=False)
+        src = np.lib.recfunctions.append_fields(
+            src, "decw", src_dec_w, dtypes=np.float, usemask=False)
+        self._src = src
+
+        return
+
+
     def do_trials(self, src_ra, src_dec, **kwargs):
         r"""Calculation of scrambled trials.
 
