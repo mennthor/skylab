@@ -108,6 +108,7 @@ _win_points = 50
 # HealpyLLH variable defaults
 _src = None
 _nsrcs = 0
+_ev_ind = np.nan
 ##############################################################################
 
 
@@ -2155,7 +2156,7 @@ class HealpyLLH(PointSourceLLH):
 
     # event selection
     _delta_ang = _delta_ang
-    _mode = _mode
+    _mode = "all"
     _thresh_S = _thresh_S
 
     # events in current selection for llh evaluation
@@ -2166,6 +2167,7 @@ class HealpyLLH(PointSourceLLH):
     # Healpy map caching
     _src = _src
     _nsrcs = _nsrcs
+    _ev_ind = _ev_ind
 
 
     def __init__(
@@ -2174,11 +2176,17 @@ class HealpyLLH(PointSourceLLH):
         Catches 'llh_model' keyword given and sets it to `HealpyLLH`.
         Passes the rest to super class init.
         """
+        if kwargs.pop("mode", "all") != "all":
+            raise ValueError("mode must be 'all' for HealpyLLH.")
+        self.mode = "all"
+
         llh_model = kwargs.pop("llh_model", ps_model.HealpyLLH())
         if not isinstance(llh_model, ps_model.HealpyLLH):
             raise TypeError("LLH model must be instance of ps_model.HealpyLLH")
 
         kwargs["llh_model"] = llh_model
+        kwargs["mode"] = "all"
+
         super(HealpyLLH, self).__init__(
             exp, mc, livetime, scramble, upscale, **kwargs)
 
@@ -2212,13 +2220,15 @@ class HealpyLLH(PointSourceLLH):
 
 
     # INTERNAL METHODS
-    def _select_events(self, src_ra, src_dec, **kwargs):
-        r"""Select events around source location(s) used in llh calculation.
+    def _select_events(self, src_ra=np.nan, src_dec=np.nan, **kwargs):
+        r"""
+        Select events around source location(s) used in llh calculation.
 
         Parameters
         ----------
         src_ra src_dec : float, array_like
-            Rightascension and Declination of source(s)
+            Rightascension and Declination of source(s).
+            Has currently no effect, because mode is always 'all'.
 
         Other parameters
         ----------------
@@ -2226,11 +2236,14 @@ class HealpyLLH(PointSourceLLH):
             Scramble rightascension prior to selection.
         inject : numpy_structured_array
             Events to add to the selected events, fields equal to exp. data.
-
+        inj_ind : int array
+            Indices for injected events. `mc[ind]` gives the original events
+            sampled from mc in the ps_injector.
+            Is used to assign cached maps to injected events.
         """
-
         scramble = kwargs.pop("scramble", False)
         inject = kwargs.pop("inject", None)
+        inj_ind = kwargs.pop("inj_ind", None)
         if kwargs:
             raise ValueError("Don't know arguments", kwargs.keys())
 
@@ -2238,23 +2251,27 @@ class HealpyLLH(PointSourceLLH):
         self.reset()
 
         # get the zenith band with correct boundaries
-        dec = (np.pi - 2. * self.delta_ang) / np.pi * src_dec
-        min_dec = max(-np.pi / 2., dec - self.delta_ang)
-        max_dec = min(np.pi / 2., dec + self.delta_ang)
+        # dec = (np.pi - 2. * self.delta_ang) / np.pi * src_dec
+        # min_dec = max(-np.pi / 2., dec - self.delta_ang)
+        # max_dec = min(np.pi / 2., dec + self.delta_ang)
 
-        dPhi = 2. * np.pi
+        # dPhi = 2. * np.pi
 
         # number of total events
         self._N = len(self.exp)
 
+        # Set event indices for exp events
+        self._ev_ind = np.arange(self._N)
+
+        # Double check if mode is 'all'
         if self.mode == "all" :
             # all events are selected
             exp_mask = np.ones_like(self.exp["sinDec"], dtype=np.bool)
 
-        elif self.mode in ["band", "box"]:
-            # get events that are within the declination band
-            exp_mask = ((self.exp["sinDec"] > np.sin(min_dec))
-                        & (self.exp["sinDec"] < np.sin(max_dec)))
+        # elif self.mode in ["band", "box"]:
+        #     # get events that are within the declination band
+        #     exp_mask = ((self.exp["sinDec"] > np.sin(min_dec))
+        #                 & (self.exp["sinDec"] < np.sin(max_dec)))
 
         else:
             raise ValueError("Not supported mode: {0:s}".format(self.mode))
@@ -2268,20 +2285,20 @@ class HealpyLLH(PointSourceLLH):
                                                  size=len(self._ev))
 
         # selection in rightascension
-        if self.mode == "box":
-            # the solid angle dOmega = dRA * dSinDec = dRA * dDec * cos(dec)
-            # is a function of declination, i.e., for a constant dOmega,
-            # the rightascension value has to change with declination
-            cosFact = np.amin(np.cos([min_dec, max_dec]))
-            dPhi = np.amin([2. * np.pi, 2. * self.delta_ang / cosFact])
-            ra_dist = np.fabs((self._ev["ra"] - src_ra + np.pi) % (2. * np.pi)
-                              - np.pi)
-            mask = ra_dist < dPhi/2.
+        # if self.mode == "box":
+        #     # the solid angle dOmega = dRA * dSinDec = dRA * dDec * cos(dec)
+        #     # is a function of declination, i.e., for a constant dOmega,
+        #     # the rightascension value has to change with declination
+        #     cosFact = np.amin(np.cos([min_dec, max_dec]))
+        #     dPhi = np.amin([2. * np.pi, 2. * self.delta_ang / cosFact])
+        #     ra_dist = np.fabs((self._ev["ra"] - src_ra + np.pi) % (2. * np.pi)
+        #                       - np.pi)
+        #     mask = ra_dist < dPhi/2.
 
-            self._ev = self._ev[mask]
+        #     self._ev = self._ev[mask]
 
-        self._src_ra = src_ra
-        self._src_dec = src_dec
+        # self._src_ra = src_ra
+        # self._src_dec = src_dec
 
         if inject is not None:
             self._ev = np.append(self._ev,
@@ -2289,16 +2306,22 @@ class HealpyLLH(PointSourceLLH):
                                     inject, "B",
                                     self.llh_model.background(inject),
                                     usemask=False))
-
-            self._N += len(inject)
+            # Append injected event indices and update total event number
+            if inj_ind is not None:
+                self._ev_ind = np.append(self._ev_ind, inj_ind)
+                self._N += len(inject)
+            else:
+                raise ValueError("injected but no inj_ind given.")
 
         # calculate signal term
-        self._ev_S = self.llh_model.signal(src_ra, src_dec, self._ev)
+        self._ev_S = self.llh_model.signal(self._ev, self._ev_ind)
 
         # do not calculate values with signal below threshold
         ev_mask = self._ev_S > self.thresh_S
         self._ev = self._ev[ev_mask]
         self._ev_S = self._ev_S[ev_mask]
+        # Update indices too
+        self._ev_ind = self._ev_ind[ev_mask]
 
         # set number of selected events
         self._n = len(self._ev)
@@ -2329,16 +2352,15 @@ class HealpyLLH(PointSourceLLH):
         return
 
     # Mode must always be 'all'
-    # @property
-    # def mode(self):
-    #     return self._mode
-    # @mode.setter
-    # def mode(self, val):
-    #     if val == self._mode:
-    #         return
-    #     self._mode = val
-    #     self.reset()
-    #     return
+    @property
+    def mode(self):
+        return self._mode
+    @mode.setter
+    def mode(self, val):
+        if val != "all":
+            raise ValueError("mode must be 'all' for HealpyLLH.")
+        self._mode = val
+        return
 
     # If someone wants to view the combined spatial source map return it here
     @property
@@ -2369,7 +2391,7 @@ class HealpyLLH(PointSourceLLH):
         """
         # Reset all previously cached values and the map cache
         self.reset()
-        self.llh_model.reset_map_cache()
+        self.reset_map_cache()
 
         # Sanity checks
         # Check if src recarray has all needed names
@@ -2982,10 +3004,14 @@ class HealpyLLH(PointSourceLLH):
         return result
     # TODO END
 
+    def reset(self):
+        r"""Also reset event indices from `_select_events()`."""
+        self._ev_ind = _ev_ind
+        super(HealpyLLH, self).reset()
+        return
+
     def reset_map_cache(self):
-        r"""
-        Reset all cached maps in `llh_model`.
-        """
+        r"""Reset all cached maps in `llh_model`."""
         self.llh_model.reset_map_cache()
         return
 
