@@ -108,8 +108,6 @@ _win_points = 50
 # HealpyLLH variable defaults
 _src = None
 _nsrcs = 0
-_spatial_pdf_map = None
-_cached_maps = None
 ##############################################################################
 
 
@@ -2131,7 +2129,7 @@ def fs(args):
 ############################################################################
 ## HealpyLLH
 ############################################################################
-class HealpyLLH(object):
+class HealpyLLH(PointSourceLLH):
     r"""
     HealpyLLH class
     """
@@ -2168,21 +2166,19 @@ class HealpyLLH(object):
     # Healpy map caching
     _src = _src
     _nsrcs = _nsrcs
-    _spatial_pdf_map = _spatial_pdf_map
-    _cached_maps = _cached_maps
 
 
     def __init__(
         self, exp, mc, livetime, scramble=True, upscale=False, **kwargs):
         r"""
-        Catches 'llh_model' keyword if given and sets it to `HealpyLLH`.
+        Catches 'llh_model' keyword given and sets it to `HealpyLLH`.
         Passes the rest to super class init.
         """
-        self.llh_model = kwargs.pop("llh_model", ps_model.HealpyLLH())
-        kwargs["llh_model"] = self.llh_model
+        llh_model = kwargs.pop("llh_model", ps_model.HealpyLLH())
+        if not isinstance(llh_model, ps_model.HealpyLLH):
+            raise TypeError("LLH model must be instance of ps_model.HealpyLLH")
 
-        self._mc = mc
-
+        kwargs["llh_model"] = llh_model
         super(HealpyLLH, self).__init__(
             exp, mc, livetime, scramble, upscale, **kwargs)
 
@@ -2207,8 +2203,8 @@ class HealpyLLH(object):
             sout += "src list : {} srcs given\n".format(self._nsrcs)
             sout += "    DECs         : {}\n".format(self._src["dec"])
             sout += "    RAs          : {}\n".format(self._src["ra"])
-            sout += "    src. wghts   : {}\n".format(self._src["weight"])
-            sout += "    det. wghts   : {}\n".format(self._src["decw"])
+            sout += "    src. weights : {}\n".format(self._src["weight"])
+            sout += "    det. weights : {}\n".format(self._src["decw"])
             sout += "    normed w_tot : {}\n".format(self._src["normw"])
         sout += 67 * "-" + "\n"
 
@@ -2326,7 +2322,7 @@ class HealpyLLH(object):
             raise ValueError("LLH model needs the class and mc-array as input")
         val, mc = args
         if not isinstance(val, ps_model.HealpyLLH):
-            raise TypeError("LLH model not instance of ps_model.HealpyLLH")
+            raise TypeError("LLH model must be instance of ps_model.HealpyLLH")
         # set likelihood module to variable and fill it with data
         self._llh_model = val
         self._llh_model(self.exp, mc, self.livetime)
@@ -2344,15 +2340,14 @@ class HealpyLLH(object):
     #     self.reset()
     #     return
 
-
-    # If someone wants to view the combinded spatial source map
+    # If someone wants to view the combined spatial source map return it here
     @property
     def spatial_pdf_map(self):
-        return self._spatial_pdf_map
+        return self.llh_model._spatial_pdf_map
 
 
     # PUBLIC methods
-    def _use_sources(self, src, exp, mc):
+    def use_sources(self, src):
         r"""
         Use this function to give a list of sources prior to calculating
         anything. This is different to the standard PointSourceLLH in which
@@ -2374,7 +2369,7 @@ class HealpyLLH(object):
         """
         # Reset all previously cached values and the map cache
         self.reset()
-        self.reset_map_cache()
+        self.llh_model.reset_map_cache()
 
         # Sanity checks
         # Check if src recarray has all needed names
@@ -2412,27 +2407,6 @@ class HealpyLLH(object):
         norm_w = src_dec_w * src["weight"]
         norm_w = norm_w / np.sum(norm_w)
 
-        # Cache smoothed llh maps for all exp events if healpy sigma is given
-        self.llh_model._cache_maps(self.exp, mc, src)
-
-
-
-
-
-
-
-        print("Start smoothing new src maps with exp sigma values"
-            + " and store in cache.")
-        # First add weighted maps, then normalize to create one signal pdf map
-        added_map = self.llh_model._add_weighted_maps(
-            src["sigma"], norm_w)
-        self._srcs_spatial_pdf_map = amp_hp.norm_healpy_map(added_map)
-        # Then convolve with event sigmas from exp to cache values
-        self._cached_exp_maps = self.llh_model._convolve_maps(
-            self._srcs_spatial_pdf_map, self.exp["sigma"])
-        # Give the llh_model the cached exp maps for the signal function
-        self.llh_model._cached_exp_maps = self._cached_exp_maps
-
         # Add norm. total weights and detector decl. weights for later use
         src = np.lib.recfunctions.append_fields(
             src, "normw", norm_w, dtypes=np.float, usemask=False)
@@ -2440,9 +2414,12 @@ class HealpyLLH(object):
             src, "decw", src_dec_w, dtypes=np.float, usemask=False)
         self._src = src
 
+        # Cache smoothed llh maps for all exp events if healpy sigma is given
+        self.llh_model._cache_maps(self.exp, self.mc, self._src)
+
         return
 
-
+    # TODO
     def do_trials(self, src_ra, src_dec, **kwargs):
         r"""Calculation of scrambled trials.
 
@@ -3003,7 +2980,14 @@ class HealpyLLH(object):
                       fit=fit, trials=trials, weights=w)
 
         return result
+    # TODO END
 
+    def reset_map_cache(self):
+        r"""
+        Reset all cached maps in `llh_model`.
+        """
+        self.llh_model.reset_map_cache()
+        return
 
     # NOT IMPLEMENTED in a stacked search.
     def all_sky_scan(self, **kwargs):
