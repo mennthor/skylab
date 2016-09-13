@@ -2,6 +2,7 @@
 ##############################################################################
 ## HealpyLLH variable defaults
 _cached_maps = None
+_N = 0
 ##############################################################################
     The signal pdf gets modified according to the stacking ansatz described in
     `Astr.Phys.J. 636:680-684, 2006 <http://arxiv.org/abs/astro-ph/0507120>`_.
@@ -21,10 +22,36 @@ _cached_maps = None
     """
     # Default values for HealpyLLH class. Can be overwritten in constructor
     # by setting the attribute as keyword argument
+    _N = _N
     _cached_maps = _cached_maps
 
 
-     # INTERNAL METHODS
+    def __call__(self, exp, mc, livetime, src, **kwargs):
+        r"""
+        Cache maps before calling the super class.
+
+        src : record array
+            Record array containing the source information. Needed fields are
+            sigma : array
+                Valid healpy map containing the spatial source pdf.
+            normw : Float
+                Containing the normed total weight per soruce. The total
+                weight is the theoretical and the detector weight the
+                source.
+        """
+        # The first _N maps are always exp maps
+        self._N = len(exp)
+        # Cache maps with every exp/mc event sigma
+        added_map = self._add_weighted_maps(src["sigma"], src["normw"])
+        sigma = np.append(exp["sigma"], mc["sigma"])
+        logger.info("Start caching exp and mc maps. This may take a while.")
+        self.cached_maps = self._convolve_maps(added_map, sigma)
+        # Do the rest in the super class
+        super(HealpyLLH, self).__call__(exp, mc, livetime, **kwargs)
+        return
+
+
+    # INTERNAL METHODS
     def _convolve_maps(self, m, sigma):
         """
         This function does:
@@ -55,11 +82,11 @@ _cached_maps = None
         return np.sum(m * w)
 
 
-    # GETTER / SETTER
-    # Smoothed healpy maps are cached for every event beforehand to shorten
-    # signal computation
+    # PROPERTIES for public variables using getters and setters
     @property
     def cached_maps(self):
+        # Smoothed healpy maps are cached for every event beforehand to shorten
+        # signal computation
         return self._cached_maps
     @cached_maps.setter
     def cached_maps(self, maps):
@@ -70,7 +97,7 @@ _cached_maps = None
 
 
     # PUBLIC METHODS
-    def signal(self, ev, mask):
+    def signal(self, ev, ind):
         r"""
         Spatial probability of each event i coming from extended source j.
         For each event a combinded source map is created and the spatial
@@ -85,9 +112,9 @@ _cached_maps = None
             Event array, import information: dec, ra, sigma. Combined events
             from exp and mc, selected in the `psLLH._select_events()` internal
             method.
-        mask : bool array
-            Selected events mask. This mask selects the correct cached map for
-            the ith event in the given `ev` array.
+        ind : int array
+            Selected events indices. This array selects the correct cached map
+            for the ith event in the given `ev` array.
 
         Returns
         --------
@@ -100,11 +127,11 @@ _cached_maps = None
             + " first using `psLLH.use_source()`")
 
         # Event array and mask must be fitting
-        if len(ev) != len(mask):
+        if len(ev) != len(ind):
             raise ValueError("ev array and mask do not fit each other.")
 
         # Select the correct maps for the input events
-        maps = self._cached_maps[mask]
+        maps = self._cached_maps[ind]
 
         # Get all pdf values: first get pixel indices for the events in ev
         NSIDE = hp.get_nside(maps[0])
@@ -116,7 +143,7 @@ _cached_maps = None
         # For every event get the correct spatial pdf signal value.
         # Because the src maps were added with the weight beforehand, this
         # already is the stacked llh value for the signal
-        S = [maps[i][ind] for i, ind in enumerate(pixind)]
+        S = [maps[i][k] for i, k in enumerate(pixind)]
 
         return np.array(S)
 
