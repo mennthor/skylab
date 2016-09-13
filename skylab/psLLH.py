@@ -2709,6 +2709,13 @@ class HealpyLLH(PointSourceLLH):
 
         return trials
 
+
+    def all_sky_scan(self, **kwargs):
+        raise NotImplementedError(
+            "For a stacked search this function has no effect.")
+        return
+
+
     # TODO
     def weighted_sensitivity(self, src_ra, src_dec, alpha, beta, inj, mc, **kwargs):
         """Calculate the point source sensitivity for a given source
