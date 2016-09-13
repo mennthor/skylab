@@ -30,7 +30,7 @@ import scipy.interpolate
 from scipy.stats import norm
 
 # local package imports
-from .__init__.py import set_pars
+from .__init__ import set_pars
 from .utils import kernel_func
 
 ############################################################################
@@ -943,10 +943,11 @@ class HealpyLLH(ClassicLLH):
         self._spatial_pdf_map = amp_hp.norm_healpy_map(added_map)
 
         # Cache maps with every exp/mc event sigma
-        logger.info("Start caching exp and mc maps. This may take a while.")
+        print("Start caching exp and mc maps. This may take a while.")
         sigma = np.append(exp["sigma"], mc["sigma"])
-        self.cached_maps = self._convolve_maps(added_map, sigma)
-        logger.info("Done caching exp and mc maps.")
+        self.cached_maps = np.array(self._convolve_maps(added_map, sigma))
+        print("Done caching {} exp and mc maps:".format(len(self.cached_maps)))
+        print("  exp maps : {}\n  mc  maps : {}".format(len(exp), len(mc)))
 
         return
 
@@ -1020,7 +1021,7 @@ class HealpyLLH(ClassicLLH):
             Spatial signal probability for each event in ev.
         """
         # Check if we have cached exp maps, should always be the case
-        if self.cached_exp_maps is None:
+        if self.cached_maps is None:
             raise ValueError("We don't have cached maps, need to add sources"
             + " first using `psLLH.use_source()`")
 
@@ -1029,7 +1030,7 @@ class HealpyLLH(ClassicLLH):
             raise ValueError("ev array and mask do not fit each other.")
 
         # Select the correct maps for the input events
-        maps = self._cached_maps[ind]
+        maps = self.cached_maps[ind]
 
         # Get all pdf values: first get pixel indices for the events in ev
         NSIDE = hp.get_nside(maps[0])
