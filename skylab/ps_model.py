@@ -1,4 +1,78 @@
 
+from __future__ import print_function
+
+"""
+This file is part of SkyLab
+
+Skylab is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+"""
+
+# python packages
+from copy import deepcopy
+from itertools import product
+import logging
+
+# scipy-project imports
+import numpy as np
+import scipy.interpolate
+from scipy.stats import norm
+
+# local package imports
+from .__init__ import set_pars
+from .utils import kernel_func
+
+############################################################################
+## HealpyLLH extra imports
+import healpy as hp
+# Status bar for long caching of healpy maps
+from tqdm import tqdm
+# My analysis tools
+import anapymods.healpy as amp_hp
+############################################################################
+
+# get module logger
+def trace(self, message, *args, **kwargs):
+    """ Add trace to logger with output level beyond debug
+    """
+    if self.isEnabledFor(5):
+        self._log(5, message, args, **kwargs)
+
+logging.addLevelName(5, "TRACE")
+logging.Logger.trace = trace
+
+logger = logging.getLogger(__name__)
+logger.addHandler(logging.StreamHandler())
+
+# default values for parameters
+
+# model-parameters
+_gamma_params = dict(gamma=[2., (1., 4.)])
+
+# histogramming
+_sinDec_bins = 25
+_sinDec_range = None
+_2dim_bins = 25
+
+# spline
+_ratio_perc = 99.
+_1dim_order = 2
+_2dim_order = 2
+_precision = 0.1
+_par_val = np.nan
+_parab_cache = np.zeros((0, ), dtype=[("S1", np.float), ("a", np.float),
+                                      ("b", np.float)])
+
 ##############################################################################
 ## HealpyLLH variable defaults
 _N = 0
@@ -51,10 +125,11 @@ _cached_maps = None
         self._spatial_pdf_map = amp_hp.norm_healpy_map(added_map)
 
         # Cache maps with every exp/mc event sigma
-        logger.info("Start caching exp and mc maps. This may take a while.")
+        print("Start caching exp and mc maps. This may take a while.")
         sigma = np.append(exp["sigma"], mc["sigma"])
-        self.cached_maps = self._convolve_maps(added_map, sigma)
-        logger.info("Done caching exp and mc maps.")
+        self.cached_maps = np.array(self._convolve_maps(added_map, sigma))
+        print("Done caching {} exp and mc maps:".format(len(self.cached_maps)))
+        print("  exp maps : {}\n  mc  maps : {}".format(len(exp), len(mc)))
 
         return
 
@@ -128,7 +203,7 @@ _cached_maps = None
             Spatial signal probability for each event in ev.
         """
         # Check if we have cached exp maps, should always be the case
-        if self.cached_exp_maps is None:
+        if self.cached_maps is None:
             raise ValueError("We don't have cached maps, need to add sources"
             + " first using `psLLH.use_source()`")
 
@@ -137,7 +212,7 @@ _cached_maps = None
             raise ValueError("ev array and mask do not fit each other.")
 
         # Select the correct maps for the input events
-        maps = self._cached_maps[ind]
+        maps = self.cached_maps[ind]
 
         # Get all pdf values: first get pixel indices for the events in ev
         NSIDE = hp.get_nside(maps[0])
