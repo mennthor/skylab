@@ -299,19 +299,15 @@ class PointSourceLLH(object):
 
         # store exp data, add sinDec information if not available
         self.exp = exp
-        ######################################################################
-        ## Make private for HealpyLLh
-        self.mc = mc
 
         if not "sinDec" in self.exp.dtype.fields:
             self.exp = numpy.lib.recfunctions.append_fields(
                     self.exp, "sinDec", np.sin(self.exp["dec"]),
                     dtypes=np.float, usemask=False)
         if not "sinDec" in mc.dtype.fields:
-            self.mc = numpy.lib.recfunctions.append_fields(
+            mc = numpy.lib.recfunctions.append_fields(
                     mc, "sinDec", np.sin(mc["dec"]),
                     dtypes=np.float, usemask=False)
-        ######################################################################
 
         # Experimental data values
         self.exp = exp
@@ -2199,8 +2195,16 @@ class HealpyLLH(PointSourceLLH):
         kwargs["llh_model"] = llh_model
         kwargs["mode"] = "all"
 
+        # Give the exp an additional ID to select correct cached maps later
+        if not "idx" in exp.dtype.fields:
+            exp = np.copy(numpy.lib.recfunctions.append_fields(
+                exp, "idx", np.arange(len(exp)), dtypes=np.int, usemask=False))
+
+        # Make MC class variable
+        self.mc = mc
+
         super(HealpyLLH, self).__init__(
-            exp, mc, livetime, scramble, upscale, **kwargs)
+            exp, self.mc, livetime, scramble, upscale, **kwargs)
 
         return
 
