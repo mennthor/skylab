@@ -717,8 +717,8 @@ class HealpyInjector(PointSourceInjector):
         in the same declination band as the sampled event corresponding to
         the events weight.
 
-        Only slightly adapted to not use 'src_dec' and added 'dec' and 'idx'
-        information to mc_arr, to use it in sample().
+        Only slightly adapted to not use 'src_dec' and added 'ra', dec' and
+        'idx' information to mc_arr, to use it in sample().
 
         If multiple samples are given the dictionary must have the structure
         `{key1:sample1, key2:sample2}` where keys are integers and samples are
@@ -743,7 +743,7 @@ class HealpyInjector(PointSourceInjector):
         # Add dec information for use in sample() function
         self.mc_arr = np.empty(0, dtype=[("idx", np.int), ("enum", np.int),
                                          ("trueE", np.float), ("ow", np.float),
-                                         ("dec", np.float)])
+                                         ("dec", np.float), ("ra", np.float)])
 
         if not isinstance(mc, dict):
             mc = {-1: mc}
@@ -770,7 +770,8 @@ class HealpyInjector(PointSourceInjector):
             mc_arr["enum"] = key * np.ones(N)
             mc_arr["ow"] = self.mc[key]["ow"] * livetime[key] * 86400.
             mc_arr["trueE"] = self.mc[key]["trueE"]
-            # Add dec information
+            # Add ra, dec information
+            mc_arr["ra"] = self.mc[key]["ra"]
             mc_arr["dec"] = self.mc[key]["dec"]
 
             # Append 'idx' information to dict mc too to use it in sample()
@@ -826,6 +827,19 @@ class HealpyInjector(PointSourceInjector):
             Sampled events for each loop iteration, either as simple array or
             as dictionary for each sample, having the same fields as exp.
         """
+        def assign_and_drop(sam_ev, inj_ra, inj_dec):
+            r"""
+            Assign sampled ra/dec positions and drop mc fields from
+            injected sample.
+            """
+            # Assign sampled locations from src map. This replaces the rotate
+            # function in PointSourceInjector
+            sam_ev["ra"] = inj_ra
+            sam_ev["dec"] = inj_dec
+            # MC names to drop from the injected events
+            mc_names = ['ow', 'trueDec', 'trueE', 'trueRa']
+            return drop_fields(sam_ev, mc_names)
+
         # Make sure that source map is a pdf
         src_map = amp_hp.norm_healpy_map(src_map)
         NSIDE = hp.get_nside(src_map)
@@ -866,10 +880,14 @@ class HealpyInjector(PointSourceInjector):
                     self.mc_arr["dec"]>min_dec, self.mc_arr["dec"]<max_dec)
                 _id = indices[mask]
                 # Choose one event from mc_arr per sampled location
-                sam_idx[i] = np.random.choice(self.mc_arr, size=1, p=self._norm_w)
+                sam_idx[i] = np.random.choice(
+                    self.mc_arr, size=1, p=self._norm_w)
 
-            # MC names to drop from the injected events
-            mc_names = ['ow', 'trueDec', 'trueE', 'trueRa']
+                # Sampled locations areeasily applied directly
+                sam_idx["ra"][i] = inj_ra[i]
+                sam_idx["dec"][i] = inj_dec[i]
+
+
             # get the events that were sampled from each sample seperately
             enums = np.unique(sam_idx["enum"])
 
@@ -877,16 +895,20 @@ class HealpyInjector(PointSourceInjector):
             if len(enums) == 1 and enums[0] < 0:
                 # only one sample, just return recarray
                 sam_ev = np.copy(self.mc[enums[0]][sam_idx["idx"]])
-                yield n_inj, drop_fields(sam_ev, mc_names)
+                # Assign sampled ra/dec to single out array
+                yield n_inj, assign_and_drop(sam_ev, inj_ra, inj_dec)
                 continue
 
             # For multiple samples return each injected event in a dict
             # indicating its original sample
             sam_ev = dict()
             for enum in enums:
-                idx = sam_idx[sam_idx["enum"] == enum]["idx"]
+                mask = (sam_idx["enum"] == enum)
+                idx = sam_idx[mask]["idx"]
                 sam_ev_i = np.copy(self.mc[enum][idx])
-                sam_ev[enum] = drop_fields(sam_ev_i, mc_names)
+                # Assign sampled ra/dec to each out array
+                sam_ev[enum] = assign_and_drop(
+                    sam_ev_i, sam_idx["ra"][mask], sam_idx["dec"][mask])
 
             yield n_inj, sam_ev
 
