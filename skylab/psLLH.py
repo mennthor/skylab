@@ -2477,7 +2477,7 @@ class HealpyLLH(PointSourceLLH):
             Parameters passed to the L-BFGS-B minimiser.
         """
         return super(HealpyLLH, self).fit_source(
-            self, src_ra=np.nan, src_dec=np.nan, **kwargs)
+            src_ra=np.nan, src_dec=np.nan, **kwargs)
 
     # TODO
     def do_trials(self, **kwargs):
