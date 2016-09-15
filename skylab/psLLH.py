@@ -2235,7 +2235,7 @@ class HealpyLLH(PointSourceLLH):
         Other parameters
         ----------------
         scramble : bool
-            Scramble rightascension prior to selection.
+            Scramble rightascension of exp events prior to selection.
         inject : numpy_structured_array
             Events to add to the selected events, fields equal to exp. data.
         inj_ind : int array
@@ -2245,7 +2245,6 @@ class HealpyLLH(PointSourceLLH):
         """
         scramble = kwargs.pop("scramble", False)
         inject = kwargs.pop("inject", None)
-        inj_ind = kwargs.pop("inj_ind", None)
         if kwargs:
             raise ValueError("Don't know arguments", kwargs.keys())
 
