@@ -2122,18 +2122,6 @@ def fs(args):
 ############################################################################
 ## HealpyLLH
 ############################################################################
-def fit_multi_cpu(args):
-    r"""
-    Wrapper around `fit` function for multiprocessing.
-    """
-    llh, inject, ind, scramble, kwargs = args
-    if scramble:
-        llh.seed = kwargs.pop("seed")
-
-    return llh.fit(
-        inject=inject, scramble=scramble, inj_ind=ind, **kwargs)
-
-
 class HealpyLLH(PointSourceLLH):
     r"""
     HealpyLLH class
@@ -2196,8 +2184,10 @@ class HealpyLLH(PointSourceLLH):
             exp = np.copy(numpy.lib.recfunctions.append_fields(
                 exp, "idx", np.arange(len(exp)), dtypes=np.int, usemask=False))
 
-        # Make MC class variable
-        self.mc = mc
+        # Make MC class variable and add sinDec field
+        if not "sinDec" in mc.dtype.fields:
+            self.mc = numpy.lib.recfunctions.append_fields(
+                mc, "sinDec", np.sin(mc["dec"]), dtypes=np.float, usemask=False)
 
         super(HealpyLLH, self).__init__(
             exp, self.mc, livetime, scramble, upscale, **kwargs)
@@ -2274,6 +2264,8 @@ class HealpyLLH(PointSourceLLH):
 
         # Set event indices for exp events
         self._ev_ind = np.arange(self._N)
+        if not np.all(self._ev_ind == self.exp["idx"]):
+            raise ValueError("exp['idx'] are not valid IDs.")
 
         # Double check if mode is 'all'
         if self.mode == "all" :
@@ -2314,19 +2306,18 @@ class HealpyLLH(PointSourceLLH):
 
         if inject is not None:
             self._ev = np.append(self._ev,
-                                 numpy.lib.recfunctions.append_fields(
-                                    inject, "B",
-                                    self.llh_model.background(inject),
-                                    usemask=False))
-            # Append injected event indices and update total event number
-            if inj_ind is not None:
-                self._ev_ind = np.append(self._ev_ind, inj_ind)
-                self._N += len(inject)
-            else:
-                raise ValueError("injected but no inj_ind given.")
+                numpy.lib.recfunctions.append_fields(
+                    inject, "B", self.llh_model.background(inject),
+                    usemask=False))
+            # Append injected event indices and start the inj counter after
+            # the last exp ID, because maps are cached in this fashion
+            self._ev_ind = np.append(
+                self._ev_ind, self._ev_ind[-1] + inject["idx"])
+            # Update total event number
+            self._N += len(inject)
 
         # calculate signal term
-        self._ev_S = self.llh_model.signal(self._ev, self._ev_ind)
+        self._ev_S = self.llh_model.signal(self._ev)
 
         # do not calculate values with signal below threshold
         ev_mask = self._ev_S > self.thresh_S
@@ -2453,10 +2444,14 @@ class HealpyLLH(PointSourceLLH):
 
         return
 
-    def fit(self, scramble=False, inject=None, inj_ind=None, **kwargs):
+    def fit_source(self, **kwargs):
         r"""
         Minimize the negative log-Likelihood for current source setup with
         regard to injected events.
+
+        Only calls the super function but setting src_ra and src_dec to np.nan
+        as they have no effect in a stacked search. The _select_events function
+        takes care of the correct event selection.
 
         Parameters
         ----------
@@ -2464,11 +2459,9 @@ class HealpyLLH(PointSourceLLH):
             Scramble events prior to selection. (default: False)
         inject : numpy_structured_array
             Events to add to the selected events, fields equal to exp. data.
+            Field `idx` are original mc indices for injected events.
+            Is used to assign cached maps to injected events.
             (default: None)
-        inj_ind : int array
-            Indices for injected events. `mc[ind]` gives the original events
-            sampled from mc in the ps_injector.
-            Is used to assign cached maps to injected events. (default: None)
 
         Returns
         -------
@@ -2480,88 +2473,11 @@ class HealpyLLH(PointSourceLLH):
 
         Other parameters
         ----------------
-        src_ra, src_dec : float arrays
-            Having no effect at the moment as mode is alwyas 'all'.
-            (default: np.nan)
         other kwargs:
             Parameters passed to the L-BFGS-B minimiser.
-
         """
-        # wrap llh function to work with arrays
-        def _llh(x, *args):
-            r"""
-            Scale likelihood variables so that they are both normalized.
-            Returns -logLambda which is the test statistic and should
-            be distributed with a chi2 distribution assuming the null
-            hypothesis is true.
-            """
-            fit_pars = dict([(par, xi) for par, xi in zip(self.params, x)])
-            fun, grad = self.llh(**fit_pars)
-            # return negative value needed for minimization
-            return -fun, -grad
-
-        # Get kwargs
-        src_ra = kwargs.pop("src_ra", np.nan)
-        src_dec = kwargs.pop("src_dec", np.nan)
-        kwargs.setdefault("pgtol", _pgtol)
-
-        # Set all weights once for this src location, if not already cached
-        self._select_events(src_ra, src_dec,
-            inject=inject, scramble=scramble, inj_ind=inj_ind)
-
-        if self._N < 1:
-            # No events selected
-            return 0., dict([(par, par_s) if not par == "nsources" else (par, 0.)
-                             for par, par_s in zip(self.params, self.par_seeds)])
-
-        # get seeds
-        pars = self.par_seeds
-        inds = [i for i, par in enumerate(self.params) if par in kwargs]
-        pars[inds] = np.array([kwargs.pop(par) for par in self.params
-                                               if par in kwargs])
-
-        # minimizer setup
-        xmin, fmin, min_dict = scipy.optimize.fmin_l_bfgs_b(
-                                _llh, pars,
-                                bounds=self.par_bounds,
-                                **kwargs)
-
-        # set up mindict to enter while, exit if fit looks nice
-        i = 0
-        min_dict = dict(warnflag=0, task="FACTR")
-        while min_dict["warnflag"] == 0 and "FACTR" in min_dict["task"]:
-            # no stop due to gradient
-            xmin, fmin, min_dict = scipy.optimize.fmin_l_bfgs_b(
-                                    _llh, pars,
-                                    bounds=self.par_bounds,
-                                    **kwargs)
-            pars[0] = self.random.uniform(0., 2. * pars[0])
-            if i > 100:
-                raise RuntimeError("Did not manage good fit")
-
-        if fmin > 0 and (self.par_bounds[0][0] <= 0
-                         and self.par_bounds[0][1] >= 0):
-            # null hypothesis is part of minimisation, fit should be negative
-            if abs(fmin) > kwargs["pgtol"]:
-                # SPAM only if the distance is large
-                logger.error("Fitter returned positive value, "
-                             "force to be zero at null-hypothesis. "
-                             "Minimum found {0} with fmin {1}".format(
-                                 xmin, fmin))
-            fmin = 0
-            xmin[0] = 0.
-
-        if self._N > 0 and abs(xmin[0]) > _rho_max * self._n:
-            logger.error(("nsources > {0:7.2%} * {1:6d} selected events, "
-                          "fit-value nsources = {2:8.1f}").format(
-                              _rho_max, self._n, xmin[0]))
-
-        xmin = dict([(par, xi) for par, xi in zip(self.params, xmin)])
-
-        # Separate over and underfluctuations
-        fmin *= -np.sign(xmin["nsources"])
-
-        return fmin, xmin
+        return super(HealpyLLH, self).fit_source(
+            self, src_ra=np.nan, src_dec=np.nan, **kwargs)
 
     # TODO
     def do_trials(self, **kwargs):
@@ -2941,14 +2857,6 @@ class HealpyLLH(PointSourceLLH):
         return
 
     # NOT IMPLEMENTED in a stacked search.
-    def fit_source(self, src_ra, src_dec, **kwargs):
-        r"""
-        Not implemented for a stacked search.
-        """
-        raise NotImplementedError(
-            "`fit_source` is not used in a stacked search.")
-        return
-
     def all_sky_scan(self, **kwargs):
         r"""
         Not implemented for a stacked search.
