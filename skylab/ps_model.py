@@ -30,7 +30,7 @@ import scipy.interpolate
 from scipy.stats import norm
 
 # local package imports
-from .__init__ import set_pars
+from . import set_pars
 from .utils import kernel_func
 
 ############################################################################
@@ -996,7 +996,7 @@ class HealpyLLH(ClassicLLH):
 
 
     # PUBLIC METHODS
-    def signal(self, ev, ind):
+    def signal(self, ev):
         r"""
         Spatial probability of each event i coming from extended source j.
         For each event a combinded source map is created and the spatial
@@ -1011,9 +1011,8 @@ class HealpyLLH(ClassicLLH):
             Event array, import information: dec, ra, sigma. Combined events
             from exp and mc, selected in the `psLLH._select_events()` internal
             method.
-        ind : int array
-            Selected events indices. This array selects the correct cached map
-            for the ith event in the given `ev` array.
+            Field `idx` are selected events indices. This array selects the
+            correct cached map for the ith event in the given `ev` array.
 
         Returns
         --------
@@ -1028,6 +1027,9 @@ class HealpyLLH(ClassicLLH):
         # Event array and mask must be fitting
         if len(ev) != len(ind):
             raise ValueError("ev array and mask do not fit each other.")
+
+        # Activate later
+        # ind = ev["idx"]
 
         # Select the correct maps for the input events
         maps = self.cached_maps[ind]
