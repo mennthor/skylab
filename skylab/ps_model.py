@@ -206,12 +206,8 @@ _cached_maps = None
             raise ValueError("We don't have cached maps, need to add sources"
             + " first using `psLLH.use_source()`")
 
-        # Event array and mask must be fitting
-        if len(ev) != len(ind):
-            raise ValueError("ev array and mask do not fit each other.")
-
-        # Activate later
-        # ind = ev["idx"]
+        # Get IDs
+        ind = ev["idx"]
 
         # Select the correct maps for the input events
         maps = self.cached_maps[ind]
