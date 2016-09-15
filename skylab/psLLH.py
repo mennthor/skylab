@@ -2130,6 +2130,18 @@ def fs(args):
 ############################################################################
 ## HealpyLLH
 ############################################################################
+def fit_multi_cpu(args):
+    r"""
+    Wrapper around `fit` function for multiprocessing.
+    """
+    llh, inject, ind, scramble, kwargs = args
+    if scramble:
+        llh.seed = kwargs.pop("seed")
+
+    return llh.fit(
+        inject=inject, scramble=scramble, inj_ind=ind, **kwargs)
+
+
 class HealpyLLH(PointSourceLLH):
     r"""
     HealpyLLH class
@@ -2441,83 +2453,22 @@ class HealpyLLH(PointSourceLLH):
 
         return
 
-    # TODO
-    def do_trials(self, src_ra, src_dec, **kwargs):
-        r"""Calculation of scrambled trials.
-
-        Perform trials on scrambled event maps to estimate the event
-        distribution.
+    def fit(self, scramble=False, inject=None, inj_ind=None, **kwargs):
+        r"""
+        Minimize the negative log-Likelihood for current source setup with
+        regard to injected events.
 
         Parameters
         ----------
-        src_dec : float
-            Declination of the interesting point for scrambling.
-
-        Returns
-        -------
-        trials : recarray
-            recarray with fields of fit-values and TS for number of injected
-            events.
-
-        Other parameters
-        ----------------
-        mu_gen : iterator
-            Iterator yielding injected events. Stored at ps_injector.
-        n_iter : int
-            Number of iterations to perform.
-
-        kwargs
-            Other keyword arguments are passed to the source fitting.
-
-        """
-        mu_gen = kwargs.pop("mu", repeat((0, None)))
-
-        # values for iteration procedure
-        n_iter = kwargs.pop("n_iter", _n_trials)
-
-        trials = np.empty((n_iter, ), dtype=[("n_inj", np.int),
-                                             ("TS", np.float)]
-                                            + [(par, np.float)
-                                               for par in self.params])
-
-        samples = [mu_gen.next() for i in xrange(n_iter)]
-        trials["n_inj"] = [sam[0] for sam in samples]
-        samples = [sam[1] for sam in samples]
-
-        if self.ncpu > 1 and len(samples) > self.ncpu:
-            args = [(self, src_ra, src_dec, sam, True,
-                     dict(kwargs.items()
-                          + [("seed", self.random.randint(2**32))]))
-                    for sam in samples]
-
-            pool = multiprocessing.Pool(self.ncpu)
-
-            result = pool.map(fs, args)
-
-            pool.close()
-            pool.join()
-
-            del pool
-
-        else:
-            result = [self.fit_source(src_ra, src_dec, inject=sam,
-                                      scramble=True, **kwargs)
-                      for sam in samples]
-
-        for i, res in enumerate(result):
-            trials["TS"][i] = res[0]
-            for key, val in res[1].iteritems():
-                trials[key][i] = val
-
-        return trials
-
-    def fit_source(self, src_ra, src_dec, **kwargs):
-        """Minimize the negative log-Likelihood at source position(s).
-
-        Parameters
-        ----------
-        src_ra src_dec : array_like
-            Source position(s).
+        scramble : bool
+            Scramble events prior to selection. (default: False)
+        inject : numpy_structured_array
+            Events to add to the selected events, fields equal to exp. data.
+            (default: None)
+        inj_ind : int array
+            Indices for injected events. `mc[ind]` gives the original events
+            sampled from mc in the ps_injector.
+            Is used to assign cached maps to injected events. (default: None)
 
         Returns
         -------
@@ -2529,39 +2480,34 @@ class HealpyLLH(PointSourceLLH):
 
         Other parameters
         ----------------
-        scramble : bool
-            Scramble events prior to selection.
-
-        inject
-            Source injector
-
-        kwargs
+        src_ra, src_dec : float arrays
+            Having no effect at the moment as mode is alwyas 'all'.
+            (default: np.nan)
+        other kwargs:
             Parameters passed to the L-BFGS-B minimiser.
 
         """
-
         # wrap llh function to work with arrays
         def _llh(x, *args):
-            """Scale likelihood variables so that they are both normalized.
+            r"""
+            Scale likelihood variables so that they are both normalized.
             Returns -logLambda which is the test statistic and should
             be distributed with a chi2 distribution assuming the null
             hypothesis is true.
-
             """
-
             fit_pars = dict([(par, xi) for par, xi in zip(self.params, x)])
-
             fun, grad = self.llh(**fit_pars)
-
             # return negative value needed for minimization
             return -fun, -grad
 
-        scramble = kwargs.pop("scramble", False)
-        inject = kwargs.pop("inject", None)
+        # Get kwargs
+        src_ra = kwargs.pop("src_ra", np.nan)
+        src_dec = kwargs.pop("src_dec", np.nan)
         kwargs.setdefault("pgtol", _pgtol)
 
         # Set all weights once for this src location, if not already cached
-        self._select_events(src_ra, src_dec, inject=inject, scramble=scramble)
+        self._select_events(src_ra, src_dec,
+            inject=inject, scramble=scramble, inj_ind=inj_ind)
 
         if self._N < 1:
             # No events selected
@@ -2616,6 +2562,72 @@ class HealpyLLH(PointSourceLLH):
         fmin *= -np.sign(xmin["nsources"])
 
         return fmin, xmin
+
+    # TODO
+    def do_trials(self, **kwargs):
+        r"""Calculation of scrambled trials.
+
+        Perform trials on scrambled event maps to estimate the event
+        distribution.
+
+        Returns
+        -------
+        trials : recarray
+            recarray with fields of fit-values and TS for number of injected
+            events.
+
+        Other parameters
+        ----------------
+        mu_gen : iterator
+            Iterator yielding injected events. Stored at ps_injector.
+        n_iter : int
+            Number of iterations to perform.
+        src_ra, src_dec : float arrays
+            Having no effect at the moment as mode is alwyas 'all'.
+            (default: np.nan)
+        other kwargs:
+            Other keyword arguments are passed to the source fitting.
+        """
+        # Get kwargs
+        mu_gen = kwargs.pop("mu", repeat((0, None)))
+        src_ra = kwargs.pop("src_ra", np.nan)
+        src_dec = kwargs.pop("src_dec", np.nan)
+
+        # values for iteration procedure
+        n_iter = kwargs.pop("n_iter", _n_trials)
+
+        trials = np.empty((n_iter, ), dtype=[("n_inj", np.int),
+                                             ("TS", np.float)]
+                                            + [(par, np.float)
+                                               for par in self.params])
+
+        samples = [mu_gen.next() for i in xrange(n_iter)]
+        trials["n_inj"] = [sam[0] for sam in samples]
+        samples = [sam[1] for sam in samples]
+
+        if self.ncpu > 1 and len(samples) > self.ncpu:
+            args = [(self, sam, ind, True, dict(kwargs.items()
+                        + [("seed", self.random.randint(2**32))]))
+                    for sam in samples]
+
+            pool = multiprocessing.Pool(self.ncpu)
+            result = pool.map(fs, args)
+
+            pool.close()
+            pool.join()
+            del pool
+
+        else:
+            result = [self.fit(
+                        scramble=True, inject=sam, inj_ind=ind, **kwargs)
+                      for sam in samples]
+
+        for i, res in enumerate(result):
+            trials["TS"][i] = res[0]
+            for key, val in res[1].iteritems():
+                trials[key][i] = val
+
+        return trials
 
     def weighted_sensitivity(self, src_ra, src_dec, alpha, beta, inj, mc, **kwargs):
         """Calculate the point source sensitivity for a given source
@@ -2929,6 +2941,14 @@ class HealpyLLH(PointSourceLLH):
         return
 
     # NOT IMPLEMENTED in a stacked search.
+    def fit_source(self, src_ra, src_dec, **kwargs):
+        r"""
+        Not implemented for a stacked search.
+        """
+        raise NotImplementedError(
+            "`fit_source` is not used in a stacked search.")
+        return
+
     def all_sky_scan(self, **kwargs):
         r"""
         Not implemented for a stacked search.
