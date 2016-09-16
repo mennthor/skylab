@@ -641,13 +641,28 @@ class HealpyInjector(PointSourceInjector):
     _seed = None
 
 
-    def __init__(self, **kwargs):
+    def __init__(self, src_map, **kwargs):
         """
         Explicitely init 'sinDec_range' and 'sinDec_bandwidth' to set all
         dependent vars.
         """
         self.sinDec_bandwidth = kwargs.pop(
             "sinDec_bandwidth", self._sinDec_bandwidth)
+
+        #TODO MAKE SRC_MAP CLASS ATTRIBUTE SO THAT FILL AND SAMPLE HAVE STANDARD HEADER
+        #TODO MAKE SRC_MAP CLASS ATTRIBUTE SO THAT FILL AND SAMPLE HAVE STANDARD HEADER
+        #TODO MAKE SRC_MAP CLASS ATTRIBUTE SO THAT FILL AND SAMPLE HAVE STANDARD HEADER
+        #TODO MAKE SRC_MAP CLASS ATTRIBUTE SO THAT FILL AND SAMPLE HAVE STANDARD HEADER
+        #TODO MAKE SRC_MAP CLASS ATTRIBUTE SO THAT FILL AND SAMPLE HAVE STANDARD HEADER
+        #TODO MAKE SRC_MAP CLASS ATTRIBUTE SO THAT FILL AND SAMPLE HAVE STANDARD HEADER
+        #TODO MAKE SRC_MAP CLASS ATTRIBUTE SO THAT FILL AND SAMPLE HAVE STANDARD HEADER
+        #TODO MAKE SRC_MAP CLASS ATTRIBUTE SO THAT FILL AND SAMPLE HAVE STANDARD HEADER
+        #TODO MAKE SRC_MAP CLASS ATTRIBUTE SO THAT FILL AND SAMPLE HAVE STANDARD HEADER
+        #TODO MAKE SRC_MAP CLASS ATTRIBUTE SO THAT FILL AND SAMPLE HAVE STANDARD HEADER
+        #TODO MAKE SRC_MAP CLASS ATTRIBUTE SO THAT FILL AND SAMPLE HAVE STANDARD HEADER
+        #TODO MAKE SRC_MAP CLASS ATTRIBUTE SO THAT FILL AND SAMPLE HAVE STANDARD HEADER
+        #TODO MAKE SRC_MAP CLASS ATTRIBUTE SO THAT FILL AND SAMPLE HAVE STANDARD HEADER
+        #TODO MAKE SRC_MAP CLASS ATTRIBUTE SO THAT FILL AND SAMPLE HAVE STANDARD HEADER
 
         # Set solid angle and some other fixed stuff
         self._min_sinDec = self._sinDec_range[0]
@@ -666,14 +681,13 @@ class HealpyInjector(PointSourceInjector):
         regarding the Injector class.
         Removed `src_dec` as it is not needed here.
         """
-        sout = ("\n{0:s}\n"+
+        sout = ("\n{:s}\n"+
                 67*"-"+"\n"+
-                "\tSpectral index     : {1:6.2f}\n"+
-                "\tDeclination range  : {2:5.1f}° - {3:5.1f}°\n"
-                "\tlog10 Energy range : {3:5.1f} to {5:5.1f}\n").format(
-                         self.__repr__(),
-                         self.gamma,
-                         np.rad2deg(self.min_dec), np.rad2deg(self.max_dec)
+                "\tSpectral index     : {:6.2f}\n"+
+                "\tsinDec bandwidth   : {:5.1f}°\n"
+                "\tlog10 Energy range : {:5.1f} to {:5.1f}\n").format(
+                         self.__repr__(), self.gamma,
+                         np.rad2deg(np.arcsin(self.sinDec_bandwidth)),
                          *self.e_range)
         sout += 67*"-"
         return sout
@@ -710,7 +724,7 @@ class HealpyInjector(PointSourceInjector):
 
 
     # PUBLIC METHODS
-    def fill(self, mc, livetime):
+    def fill(self, src_dec, mc, livetime):
         r"""
         Fill the Injector with MonteCarlo events by sampling event positions
         from the spatial source map. Those positions are assigned to MC events
@@ -725,6 +739,9 @@ class HealpyInjector(PointSourceInjector):
         record arrays. The same applies to livetimes: `{key1:livetime1, ...}`.
         If only one sample is given as a record array it is internally
         converted to a dictionary with `{-1 : mc}` and `{-1 : livetime}`.
+
+        `src_dec` is kept as a dummy argument for compatibility but has
+        no effect.
 
         Parameters
         -----------
@@ -781,18 +798,20 @@ class HealpyInjector(PointSourceInjector):
 
             self.mc_arr = np.append(self.mc_arr, mc_arr)
 
-            sout = ("Sample {:s}: Selected {:6d} events\n"
-                    "  DEC : {:7.2f}° - {:7.2f}°\n"
-                    "  E   : {:7.2f} and {:7.2f} in {:7.2f} GeV").format(
-                str(key), N,
-                np.rad2deg(self._min_dec), np.rad2deg(self._max_dec),
-                self.e_range[0], self.e_range[1], self.GeV)
+            sout = (67 * "-" + "\nFill HealpyInjector info:"
+                    "  Sample {:s}: Selected {:6d} events\n"
+                    "    DEC : {:7.2f}° - {:7.2f}°\n"
+                    "    E   : {:7.2f} and {:7.2f} in {:7.2f} GeV").format(
+                        str(key), N,
+                        np.rad2deg(self._min_dec), np.rad2deg(self._max_dec),
+                        self.e_range[0], self.e_range[1], self.GeV)
             print(sout)
 
         if len(self.mc_arr) < 1:
             raise ValueError("Select no events at all")
 
-        print("Selected {0:d} events in total".format(len(self.mc_arr)))
+        print("  Selected {0:d} events in total".format(len(self.mc_arr)))
+        print(67*"-")
 
         self._weights()
 
