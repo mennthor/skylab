@@ -76,7 +76,6 @@ _parab_cache = np.zeros((0, ), dtype=[("S1", np.float), ("a", np.float),
 
 ##############################################################################
 ## HealpyLLH variable defaults
-_N = 0
 _spatial_pdf_map = None
 _cached_maps = None
 ##############################################################################
@@ -915,7 +914,6 @@ class HealpyLLH(ClassicLLH):
     """
     # Default values for HealpyLLH class. Can be overwritten in constructor
     # by setting the attribute as keyword argument
-    _N = _N
     _spatial_pdf_map = _spatial_pdf_map
     _cached_maps = _cached_maps
 
@@ -935,21 +933,42 @@ class HealpyLLH(ClassicLLH):
                 weight is the theoretical and the detector weight the
                 source.
         """
-        # The first _N maps are always exp maps
-        self._N = len(exp)
-
         # First make single source spatial pdf by adding weighted maps
-        added_map = self._add_weighted_maps(src["sigma"], src["normw"])
-        self._spatial_pdf_map = amp_hp.norm_healpy_map(added_map)
+        self._spatial_pdf_map = self._make_spatial_pdf_map(src)
 
         # Cache maps with every exp/mc event sigma
         print("Start caching exp and mc maps. This may take a while.")
         sigma = np.append(exp["sigma"], mc["sigma"])
-        self.cached_maps = np.array(self._convolve_maps(added_map, sigma))
+        self.cached_maps = np.array(self._convolve_maps(
+            self._spatial_pdf_map, sigma))
         print("Done caching {} exp and mc maps:".format(len(self.cached_maps)))
         print("  exp maps : {}\n  mc  maps : {}".format(len(exp), len(mc)))
 
         return
+
+    def _make_spatial_pdf_map(self, src):
+        r"""
+        Wrapper to make a spatial src map pdf from maps and weights.
+
+        Parameters
+        ----------
+        src : record array
+            Record array containing the source information. Needed fields are
+            sigma : array
+                Valid healpy map containing the spatial source pdf.
+            normw : Float
+                Containing the normed total weight per soruce. The total
+                weight is the theoretical and the detector weight the
+                source.
+
+        Returns
+        -------
+        spatial_pdf_map : healpy map
+            Single map containing added weighted submaps and normed to area=1.
+        """
+        added_map = self._add_weighted_maps(src["sigma"], src["normw"])
+        self._spatial_pdf_map = amp_hp.norm_healpy_map(added_map)
+        return self._spatial_pdf_map
 
     def _convolve_maps(self, m, sigma):
         """

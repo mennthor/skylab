@@ -1001,7 +1001,7 @@ class PointSourceLLH(object):
             Other keyword arguments are passed to the source fitting.
 
         """
-        mu_gen = kwargs.pop("mu", repeat((0, None)))
+        mu_gen = kwargs.pop("mu_gen", repeat((0, None)))
 
         # values for iteration procedure
         n_iter = kwargs.pop("n_iter", _n_trials)
@@ -2371,7 +2371,7 @@ class HealpyLLH(PointSourceLLH):
 
 
     # PUBLIC methods
-    def use_sources(self, src):
+    def use_sources(self, src, reset_cache=True):
         r"""
         Use this function to give a list of sources prior to calculating
         anything. This is different to the standard PointSourceLLH in which
@@ -2390,10 +2390,15 @@ class HealpyLLH(PointSourceLLH):
                List of healpy maps. The maps are convolved with a gaussian with
                the reconstruction sigma of each event and used as the spatial
                pdf for each event. (dtype is object or numpy.ndarray)
+        reset_cache : bool
+            Wether to reset the map cache of the llh_model. Setting this to
+            True will trigger recaching of all maps.
         """
         # Reset all previously cached values and the map cache
         self.reset()
-        self.reset_map_cache()
+        if reset_cache:
+            # This triggers caching below whne requested by the user
+            self.reset_map_cache()
 
         # Sanity checks
         # Check if src recarray has all needed names
@@ -2438,12 +2443,23 @@ class HealpyLLH(PointSourceLLH):
             src, "decw", src_dec_w, dtypes=np.float, usemask=False)
         self._src = src
 
-        # Cache smoothed llh maps for all exp events if healpy sigma is given
-        self.llh_model._cache_maps(self.exp, self.mc, self._src)
+        # Cache smoothed llh maps if there are none
+        if self.llh_model.cached_maps is None:
+            # If user thought there was a cache but there is none, tell him
+            if not reset_cache:
+                print("'reset_cache=False' given, but no cache found. "
+                      "Have to recache maps.")
+            self.llh_model._cache_maps(self.exp, self.mc, self._src)
+        else:
+            print("Cached maps are available, not caching again. "
+                  "The user is responsible that the existing cache is OK. "
+                  "If unsure call use_sources() with `reset_cache=True`.")
+            # Even if cache is there, update the src_map info manually
+            self.llh_model._make_spatial_pdf_map(src)
 
         return
 
-    def fit_source(self, **kwargs):
+    def fit_source(self, src_ra=np.nan, src_dec=np.nan, **kwargs):
         r"""
         Minimize the negative log-Likelihood for current source setup with
         regard to injected events.
@@ -2478,12 +2494,21 @@ class HealpyLLH(PointSourceLLH):
         return super(HealpyLLH, self).fit_source(
             src_ra=np.nan, src_dec=np.nan, **kwargs)
 
-    # TODO
-    def do_trials(self, **kwargs):
-        r"""Calculation of scrambled trials.
-
+    def do_trials(self, src_ra=np.nan, src_dec=np.nan, **kwargs):
+        r"""
         Perform trials on scrambled event maps to estimate the event
         distribution.
+
+        Only calls the super function but setting src_ra and src_dec to np.nan
+        as they have no effect in a stacked search. The _select_events function
+        takes care of the correct event selection.
+
+        Parameters
+        ----------
+        mu_gen : iterator
+            Iterator yielding injected events. Stored at ps_injector.
+        n_iter : int
+            Number of iterations to perform.
 
         Returns
         -------
@@ -2493,75 +2518,32 @@ class HealpyLLH(PointSourceLLH):
 
         Other parameters
         ----------------
-        mu_gen : iterator
-            Iterator yielding injected events. Stored at ps_injector.
-        n_iter : int
-            Number of iterations to perform.
-        src_ra, src_dec : float arrays
-            Having no effect at the moment as mode is alwyas 'all'.
-            (default: np.nan)
-        other kwargs:
+        kwargs
             Other keyword arguments are passed to the source fitting.
         """
-        # Get kwargs
-        mu_gen = kwargs.pop("mu", repeat((0, None)))
-        src_ra = kwargs.pop("src_ra", np.nan)
-        src_dec = kwargs.pop("src_dec", np.nan)
+        return super(HealpyLLH, self).do_trials(
+            src_ra=np.nan, src_dec=np.nan, **kwargs)
 
-        # values for iteration procedure
-        n_iter = kwargs.pop("n_iter", _n_trials)
-
-        trials = np.empty((n_iter, ), dtype=[("n_inj", np.int),
-                                             ("TS", np.float)]
-                                            + [(par, np.float)
-                                               for par in self.params])
-
-        samples = [mu_gen.next() for i in xrange(n_iter)]
-        trials["n_inj"] = [sam[0] for sam in samples]
-        samples = [sam[1] for sam in samples]
-
-        if self.ncpu > 1 and len(samples) > self.ncpu:
-            args = [(self, sam, ind, True, dict(kwargs.items()
-                        + [("seed", self.random.randint(2**32))]))
-                    for sam in samples]
-
-            pool = multiprocessing.Pool(self.ncpu)
-            result = pool.map(fs, args)
-
-            pool.close()
-            pool.join()
-            del pool
-
-        else:
-            result = [self.fit(
-                        scramble=True, inject=sam, inj_ind=ind, **kwargs)
-                      for sam in samples]
-
-        for i, res in enumerate(result):
-            trials["TS"][i] = res[0]
-            for key, val in res[1].iteritems():
-                trials[key][i] = val
-
-        return trials
-
-    def weighted_sensitivity(self, src_ra, src_dec, alpha, beta, inj, mc, **kwargs):
-        """Calculate the point source sensitivity for a given source
+    def weighted_sensitivity(
+        self, alpha, beta, inj, mc, src_ra=np.nan, src_dec=np.nan, **kwargs):
+        r"""
+        Calculate the point source sensitivity for a given source
         hypothesis using weights.
 
         All trials calculated are used at each step and weighted using the
         Poissonian probability. Credits for this idea goes to Asen Christov of
         IceCube in Geneva.
 
+        Only calls the super function but setting src_ra and src_dec to np.nan
+        as they have no effect in a stacked search. The _select_events function
+        takes care of the correct event selection.
+
         Parameters
         ----------
-        src_ra : float
-            Source position(s)
-        src_dec : float
-            Source position(s)
         alpha : array-like (m, )
-            Error of first kind
+            Error of first kind. Sensitivity/Dis. Pot. alpha = [0.5, 5sigma]
         beta : array-like (m, )
-            Error of second kind
+            Error of second kind. Sensitivity/Dis. Pot. alpha = [0.9, 0.5]
         inj : skylab.BaseInjector instance
             Injection module
         mc : numpy-recarray
@@ -2571,18 +2553,17 @@ class HealpyLLH(PointSourceLLH):
 
         Returns
         -------
-        dict containting the following keys
-
-        flux : array-like (m, )
-            Flux needed to reach sensitivity of *alpha*, *beta*
-        mu : array-like (m, )
-            Number of injected events corresponding to flux.
-        TSval : array-like (m, )
-            TS value at value of alpha for background
-        weights : array-like (m, n)
-            Weights for all n trials corresponding to m mu values.
-        trials : recarray (n, )
-            Array containing all information about trial of each fit
+        dict containting the following keys:
+            flux : array-like (m, )
+                Flux needed to reach sensitivity of *alpha*, *beta*
+            mu : array-like (m, )
+                Number of injected events corresponding to flux.
+            TSval : array-like (m, )
+                TS value at value of alpha for background
+            weights : array-like (m, n)
+                Weights for all n trials corresponding to m mu values.
+            trials : recarray (n, )
+                Array containing all information about trial of each fit
 
         Optional Parameters
         --------------------
@@ -2600,249 +2581,10 @@ class HealpyLLH(PointSourceLLH):
             alpha obsolete.
         eps : float
             Precision for breaking point.
-
         """
-
-        def do_estimation(TSval, beta, trials):
-            r"""Perform sensitivity estimation by varying the injected source
-            strength until the scrambling yields a test statistic with the
-            wanted value of *beta*.
-
-            """
-
-            print("\tTS    = {0:6.2f}\n".format(TSval) +
-                  "\tbeta  = {0:7.2%}".format(beta))
-            print()
-
-            if (len(trials) < 1 or (not np.any(trials["n_inj"] > 0))
-                    or (not np.any(trials["TS"][trials["n_inj"] > 0]
-                        > 2. * TSval))):
-                # if no events have been injected, do quick estimation
-                # of active region by doing a few trials
-
-                # start with first number of trials that was never used before
-                if len(trials) < 1:
-                    n_inj = 0
-                else:
-                    n_inj = np.bincount(trials["n_inj"])
-                    n_inj = (len(n_inj) if np.all(n_inj > 0)
-                                        else np.where(n_inj < 1)[0][0])
-
-                print("Quick estimate of active region, "
-                      "inject increasing number of events "
-                      "starting with {0:d} events...".format(n_inj + 1))
-
-                n_inj = int(np.mean(trials["n_inj"])) if len(trials) > 0 else 0
-                while True:
-                    n_inj, sample = inj.sample(src_ra, n_inj + 1, poisson=False).next()
-
-                    TS_i, xmin_i = self.fit_source(src_ra, src_dec,
-                                                   inject=sample,
-                                                   scramble=True)
-
-                    trial_i = np.empty((1, ), dtype=trials.dtype)
-                    trial_i["n_inj"] = n_inj
-                    trial_i["TS"] = TS_i
-                    for par in self.params:
-                        trial_i[par] = xmin_i[par]
-
-                    trials = np.append(trials, trial_i)
-
-                    mTS = np.bincount(trials["n_inj"], weights=trials["TS"])
-                    mW = np.bincount(trials["n_inj"])
-                    mTS[mW > 0] /= mW[mW > 0]
-
-                    resid = mTS - TSval
-
-                    if (float(np.count_nonzero(resid > 0)) / len(resid) > beta
-                        or np.all(resid > 0)):
-                        mu_eff = len(mTS) * beta
-
-                        break
-
-                print("\tActive region: {0:5.1f}".format(mu_eff))
-                print()
-
-                # do trials around active region
-                trials = np.append(trials,
-                                   self.do_trials(src_ra, src_dec, n_iter=n_iter,
-                                                  mu=inj.sample(src_ra, mu_eff),
-                                                  **kwargs))
-
-
-            # start estimation
-            i = 1
-            while True:
-                # use existing scrambles to determine best starting point
-                fun = lambda n: np.log10(
-                                    (utils.poisson_percentile(n,
-                                                              trials["n_inj"],
-                                                              trials["TS"],
-                                                              TSval)[0]
-                                     - beta)**2)
-
-                # fit values in region where sampled before
-                bounds = np.percentile(trials["n_inj"][trials["n_inj"] > 0],
-                                       [_ub_perc, 100. - _ub_perc])
-
-                if bounds[0] == 1:
-                    bounds[0] = (float(np.count_nonzero(trials["n_inj"] == 1))
-                                    / np.sum(trials["n_inj"] < 2))
-
-                print("\tEstimate sens. in region {0:5.1f} to {1:5.1f}".format(
-                            *bounds))
-
-                # get best starting point
-                ind = np.argmin([fun(n_i) for n_i in np.arange(0., bounds[-1])])
-
-                # fit closest point to beta value
-                x, f, info = scipy.optimize.fmin_l_bfgs_b(
-                                    fun, [ind], bounds=[bounds],
-                                    approx_grad=True)
-
-                mu_eff = np.asscalar(x)
-
-                # get the statistical uncertainty of the quantile
-                b, b_err = utils.poisson_percentile(mu_eff, trials["n_inj"],
-                                                    trials["TS"], TSval)
-
-                print("\t\tBest estimate: "
-                      "{0:6.2f}, ({1:7.2%} +/- {2:8.3%})".format(mu_eff,
-                                                                 b, b_err))
-
-                # if precision is high enough and fit did converge,
-                # the wanted values is reached, stop trial computation
-                if (i > 1 and b_err < eps
-                        and mu_eff > bounds[0] and mu_eff < bounds[-1]
-                        and np.fabs(b - beta) < eps):
-                    break
-
-                # to avoid a spiral with too few events we want only half
-                # of all events to be background scrambles after iterations
-                p_bckg = np.sum(trials["n_inj"] == 0,
-                                dtype=np.float) / len(trials)
-                mu_eff_min = np.log(1. / (1. - p_bckg))
-                mu_eff = np.amax([mu_eff, mu_eff_min])
-
-                print("\tDo {0:6d} trials with mu = {1:6.2f} events".format(
-                            n_iter, mu_eff))
-
-                # do trials with best estimate
-                trials = np.append(trials, self.do_trials(
-                    src_ra, src_dec, mu=inj.sample(src_ra, mu_eff), n_iter=n_iter, **kwargs))
-
-                sys.stdout.flush()
-
-                i += 1
-
-            # save all trials
-
-            return mu_eff, trials
-
-        start = time.time()
-
-        # configuration
-        n_bckg = int(kwargs.pop("n_bckg", _n_trials))
-        n_iter = int(kwargs.pop("n_iter", _n_iter))
-        eps = kwargs.pop("eps", _eps)
-        fit = kwargs.pop("fit", None)
-
-        if fit is not None and not hasattr(fit, "isf"):
-            raise AttributeError("fit must have attribute 'isf(alpha)'!")
-
-        # all input values as lists
-        alpha = np.atleast_1d(alpha)
-        beta = np.atleast_1d(beta)
-        TSval = np.atleast_1d(kwargs.pop("TSval", [None for i in alpha]))
-        if not (len(alpha) == len(beta) == len(TSval)):
-            raise ValueError("alpha, beta, and (if given) TSval must have "
-                             " same length!")
-
-        # setup source injector
-        inj.fill(src_dec, mc, self.livetime)
-
-        print("Estimate Sensitivity for declination {0:5.1f} deg".format(
-                np.degrees(src_dec)))
-
-        # result list
-        TS = list()
-        mu_flux = list()
-        flux = list()
-        trials = np.empty((0, ), dtype=[("n_inj", np.int), ("TS", np.float)]
-                                       + [(par, np.float)
-                                          for par in self.params])
-
-        for i, (TSval_i, alpha_i, beta_i) in enumerate(zip(TSval, alpha, beta)):
-
-            if TSval_i is None:
-                # Need to calculate TS value for given alpha values
-                if fit == None:
-                    # No parametrization of background given, do scrambles
-                    print("\tDo background scrambles for estimation of "
-                          "TS value for alpha = {0:7.2%}".format(alpha_i))
-
-                    trials = np.append(trials,
-                                       self.do_trials(src_ra, src_dec,
-                                                      n_iter=n_bckg,
-                                                      **kwargs))
-
-                    stop = time.time()
-                    mins, secs = divmod(stop - start, 60)
-                    hours, mins = divmod(mins, 60)
-
-                    print("\t{0:6d} Background scrambles finished ".format(
-                                len(trials))+
-                          "after {0:3d}h {1:2d}' {2:4.2f}''".format(
-                              int(hours), int(mins), secs))
-
-                    print("Fit background function to scrambles")
-                    if self.nsource_bounds[0] < 0:
-                        print("Fit two sided chi2 to background scrambles")
-                        fitfun = utils.twoside_chi2
-                    else:
-                        print("Fit delta chi2 to background scrambles")
-                        fitfun = utils.delta_chi2
-                    fit = fitfun(trials["TS"][trials["n_inj"] == 0], df=2.,
-                                 floc=0., fscale=1.)
-
-                    # give information about the fit
-                    print(fit)
-
-                # use fitted function to calculate needed TS-value
-                TSval_i = np.asscalar(fit.isf(alpha_i))
-
-            # calculate sensitivity
-            mu_i, trials = do_estimation(TSval_i, beta_i, trials)
-
-            TS.append(TSval_i)
-            mu_flux.append(mu_i)
-            flux.append(inj.mu2flux(mu_i))
-
-            stop = time.time()
-
-            mins, secs = divmod(stop - start, 60)
-            hours, mins = divmod(mins, 60)
-            print("\tFinished after "
-                  "{0:3d}h {1:2d}' {2:4.2f}''".format(int(hours), int(mins),
-                                                      secs))
-            print("\t\tInjected: {0:6.2f}".format(mu_i))
-            print("\t\tFlux    : {0:.2e}".format(flux[-1]))
-            print("\t\tTrials  : {0:6d}".format(len(trials)))
-            print("\t\tTime    : {0:6.2f} trial(s) / sec".format(
-                float(len(trials)) / (stop - start)))
-            print()
-
-            sys.stdout.flush()
-
-        # add weights
-        w = np.vstack([utils.poisson_weight(trials["n_inj"], mu_flux_i)
-                       for mu_flux_i in mu_flux])
-
-        result = dict(flux=flux, mu=mu_flux, TSval=TS, alpha=alpha, beta=beta,
-                      fit=fit, trials=trials, weights=w)
-
-        return result
-    # TODO END
+        super(HealpyLLH, self).weighted_sensitivity(
+            src_ra=np.nan, src_dec=np.nan,
+            alpha=alpha, beta=beta, inj=inj, mc=mc, **kwargs)
 
     def reset(self):
         r"""Also reset event indices from `_select_events()`."""
