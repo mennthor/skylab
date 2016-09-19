@@ -646,23 +646,10 @@ class HealpyInjector(PointSourceInjector):
         Explicitely init 'sinDec_range' and 'sinDec_bandwidth' to set all
         dependent vars.
         """
+        self.src_map = src_map
+
         self.sinDec_bandwidth = kwargs.pop(
             "sinDec_bandwidth", self._sinDec_bandwidth)
-
-        #TODO MAKE SRC_MAP CLASS ATTRIBUTE SO THAT FILL AND SAMPLE HAVE STANDARD HEADER
-        #TODO MAKE SRC_MAP CLASS ATTRIBUTE SO THAT FILL AND SAMPLE HAVE STANDARD HEADER
-        #TODO MAKE SRC_MAP CLASS ATTRIBUTE SO THAT FILL AND SAMPLE HAVE STANDARD HEADER
-        #TODO MAKE SRC_MAP CLASS ATTRIBUTE SO THAT FILL AND SAMPLE HAVE STANDARD HEADER
-        #TODO MAKE SRC_MAP CLASS ATTRIBUTE SO THAT FILL AND SAMPLE HAVE STANDARD HEADER
-        #TODO MAKE SRC_MAP CLASS ATTRIBUTE SO THAT FILL AND SAMPLE HAVE STANDARD HEADER
-        #TODO MAKE SRC_MAP CLASS ATTRIBUTE SO THAT FILL AND SAMPLE HAVE STANDARD HEADER
-        #TODO MAKE SRC_MAP CLASS ATTRIBUTE SO THAT FILL AND SAMPLE HAVE STANDARD HEADER
-        #TODO MAKE SRC_MAP CLASS ATTRIBUTE SO THAT FILL AND SAMPLE HAVE STANDARD HEADER
-        #TODO MAKE SRC_MAP CLASS ATTRIBUTE SO THAT FILL AND SAMPLE HAVE STANDARD HEADER
-        #TODO MAKE SRC_MAP CLASS ATTRIBUTE SO THAT FILL AND SAMPLE HAVE STANDARD HEADER
-        #TODO MAKE SRC_MAP CLASS ATTRIBUTE SO THAT FILL AND SAMPLE HAVE STANDARD HEADER
-        #TODO MAKE SRC_MAP CLASS ATTRIBUTE SO THAT FILL AND SAMPLE HAVE STANDARD HEADER
-        #TODO MAKE SRC_MAP CLASS ATTRIBUTE SO THAT FILL AND SAMPLE HAVE STANDARD HEADER
 
         # Set solid angle and some other fixed stuff
         self._min_sinDec = self._sinDec_range[0]
@@ -721,6 +708,19 @@ class HealpyInjector(PointSourceInjector):
         self._sinDec_bandwidth = float(val)
         self._dec_bandwidth = np.arcsin(self._sinDec_bandwidth)
         return
+    # The source map must be a class attribute to stay consistent with the
+    # `fill()` function call
+    @property
+    def src_map(self):
+        return self._src_map
+    @src_map.setter
+    def src_map(self, map):
+       # Throws error if no valid map given
+       hp.maptype(map)
+       # Make sure we have a pdf
+       self._src_map = amp_hp.norm_healpy_map(map)
+       return
+
 
 
     # PUBLIC METHODS
@@ -818,7 +818,8 @@ class HealpyInjector(PointSourceInjector):
         return
 
 
-    def sample(self, mean_mu, src_map, poisson=True):
+    # def sample(self, mean_mu, src_map, poisson=True):
+    def sample(self, src_ra, mean_mu, poisson=True):
         r"""
         Inject mean_mu (more below) events using rejection sampling from
         the healpy src_map.
@@ -827,6 +828,9 @@ class HealpyInjector(PointSourceInjector):
         sampled position because the detector acceptance is declination
         dependent and only events from the same declination band are
         representative for an event position at the same declination.
+
+        `src_ra` is kept as a dummy argument for compatibility but has
+        no effect.
 
         Parameters
         ----------
@@ -860,7 +864,7 @@ class HealpyInjector(PointSourceInjector):
             return drop_fields(sam_ev, mc_names)
 
         # Make sure that source map is a pdf
-        src_map = amp_hp.norm_healpy_map(src_map)
+        src_map = self.src_map
         NSIDE = hp.get_nside(src_map)
 
         # Here starts the generator part
