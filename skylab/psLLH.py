@@ -1461,7 +1461,7 @@ class PointSourceLLH(object):
                 # do trials around active region
                 trials = np.append(trials,
                                    self.do_trials(src_ra, src_dec, n_iter=n_iter,
-                                                  mu=inj.sample(src_ra, mu_eff),
+                                                  mu_gen=inj.sample(src_ra, mu_eff),
                                                   **kwargs))
 
 
@@ -1524,7 +1524,7 @@ class PointSourceLLH(object):
 
                 # do trials with best estimate
                 trials = np.append(trials, self.do_trials(
-                    src_ra, src_dec, mu=inj.sample(src_ra, mu_eff), n_iter=n_iter, **kwargs))
+                    src_ra, src_dec, mu_gen=inj.sample(src_ra, mu_eff), n_iter=n_iter, **kwargs))
 
                 sys.stdout.flush()
 
@@ -2586,7 +2586,7 @@ class HealpyLLH(PointSourceLLH):
         eps : float
             Precision for breaking point.
         """
-        super(HealpyLLH, self).weighted_sensitivity(
+        return super(HealpyLLH, self).weighted_sensitivity(
             src_ra=np.nan, src_dec=np.nan,
             alpha=alpha, beta=beta, inj=inj, mc=mc, **kwargs)
 
