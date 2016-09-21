@@ -625,11 +625,10 @@ class HealpyInjector(PointSourceInjector):
         which MC events are select for injection.
         Make sure, that this span all the src position, otherwise
     """
-    _src_map = None
-    # Approx 5 deg above and below current event
+    _src = None
     _sinDec_bandwidth = 0.1
 
-    # Those are constant here becasue we sample from src_map directly
+    # Those are constant here becasue we sample from src maps directly
     _sinDec_range = [-1., +1.]
     _omega = 4. * np.pi
 
@@ -641,12 +640,27 @@ class HealpyInjector(PointSourceInjector):
     _seed = None
 
 
-    def __init__(self, src_map, **kwargs):
+    def __init__(self, src, **kwargs):
         """
-        Explicitely init 'sinDec_range' and 'sinDec_bandwidth' to set all
+        Set src array as a attribute so we can use it for the `sample()`
+        function.
+
+        Also explicitely init 'sinDec_range' and 'sinDec_bandwidth' to set all
         dependent vars.
+
+        Parameters
+        ----------
+        src is a numpy record array with the following fields needed:
+            norm_w : array
+                Total normed weight for each source. This includes theoretical
+                and detector acceptance weight for each source. This field is
+                calculated in the psLLH.HealpyLLH.use_sources()` function.
+            sigma : array
+               List of healpy maps. The maps are convolved with a gaussian with
+               the reconstruction sigma of each event and used as the spatial
+               pdf for each event. (dtype is object or numpy.ndarray)
         """
-        self.src_map = src_map
+        self.src = src
 
         self.sinDec_bandwidth = kwargs.pop(
             "sinDec_bandwidth", self._sinDec_bandwidth)
@@ -708,17 +722,14 @@ class HealpyInjector(PointSourceInjector):
         self._sinDec_bandwidth = float(val)
         self._dec_bandwidth = np.arcsin(self._sinDec_bandwidth)
         return
-    # The source map must be a class attribute to stay consistent with the
-    # `fill()` function call
+    # The source recarray must be a class attribute to stay consistent with
+    # the `fill()` function call
     @property
-    def src_map(self):
-        return self._src_map
-    @src_map.setter
-    def src_map(self, map):
-       # Throws error if no valid map given
-       hp.maptype(map)
-       # Make sure we have a pdf
-       self._src_map = amp_hp.norm_healpy_map(map)
+    def src(self):
+        return self._src
+    @src.setter
+    def src(self, src):
+       self._src = src
        return
 
 
@@ -836,8 +847,6 @@ class HealpyInjector(PointSourceInjector):
         ----------
         mean_mu : float
             Mean number of events to sample
-        src_map : healpy map
-            Spatial source distribution map.
         poisson : bool
             Use poisson fluctuations, otherwise sample exactly *mean_mu*.
             (default: True)
@@ -863,10 +872,6 @@ class HealpyInjector(PointSourceInjector):
             mc_names = ['ow', 'trueDec', 'trueE', 'trueRa']
             return drop_fields(sam_ev, mc_names)
 
-        # Make sure that source map is a pdf
-        src_map = self.src_map
-        NSIDE = hp.get_nside(src_map)
-
         # Here starts the generator part
         while True:
             # Sample mu_mean directly or get n_inj from a poisson distribution
@@ -878,8 +883,19 @@ class HealpyInjector(PointSourceInjector):
                 yield n_inj, None
                 continue
 
-            # Sample indices from src map and convert to map coordinates
-            inj_ind, _ = amp_hp.healpy_rejection_sampler(src_map, n=n_inj)
+            # First we need to select sources to sample from using their weight
+            src_idx = np.random.choice(
+                np.arange(len(self.src)), size=n_inj, p=src["norm_w"])
+
+            # Sample indices from selected src maps and convert to map
+            # coordinates
+            inj_ind = np.zeros(n_inj)
+            for i, src_id in enumerate(src_idx):
+                # Sample one event from the selected source map
+                inj_ind[i], _ = amp_hp.healpy_rejection_sampler(
+                    src["sigma"][src_id], n=1)
+
+            # Assign indices to healpy map coordinates
             inj_th, inj_phi = hp.pix2ang(NSIDE, inj_ind)
 
             # Get equatorial coordinates for the injected signal
