@@ -2626,3 +2626,87 @@ class HealpyLLH(PointSourceLLH):
             "`fit_source_loc` is not used in a stacked search.")
         return
 
+
+
+############################################################################
+## DistributedHealpyLLH
+############################################################################
+class DistributedHealpyLLH(HealpyLLH):
+
+
+    # PUBLIC methods
+    def use_sources(self, src, reset_cache=True):
+        r"""
+        Use this function to give a list of sources prior to calculating
+        anything. This is different to the standard PointSourceLLH in which
+        each function gets a single source in the argument.
+
+        Parameters
+        ----------
+        src is a numpy record array with the following fields:
+            ra, dec: array
+                 Position of the sources in equatorial coordinates.
+            weight : array
+                Theoretical (or intrinsic) weight for each source.
+            sigma : array
+               List of healpy maps. The maps are convolved with a gaussian with
+               the reconstruction sigma of each event and used as the spatial
+               pdf for each event. (dtype is object or numpy.ndarray)
+        """
+        # Reset all previously cached values and the map cache
+        self.reset()
+
+        # Sanity checks
+        # Check if src recarray has all needed names
+        names = ["ra", "dec", "weight", "sigma"]
+        if not all (k in src.dtype.names for k in names):
+            raise KeyError(
+                "src array must have names 'ra', 'dec', 'weight' and 'sigma'")
+
+        # Check if sigma field contains valid healpy maps
+        if not hp.maptype(src["sigma"]) > 0:
+            raise ValueError("Healpy maps in 'sigma' field not valid.")
+
+        # Check if coordinates are valid equatorial coordinates in radians
+        if np.any(src["ra"] < 0) or np.any(src["ra"] > 2*np.pi):
+            raise ValueError("RA value(s) not valid equatorial coordinates")
+        if np.any(src["dec"] < -np.pi/2.) or np.any(src["dec"] > +np.pi/2.):
+            raise ValueError("DEC value(s) not valid equatorial coordinates")
+
+        # Zero weight makes no sense
+        if np.any(src["weight"] <= 0):
+            raise ValueError("Source weight(s) <= 0 detected.")
+        # End of sanity checks
+
+        # Get number of sources
+        self._nsrcs = len(src)
+
+        # Get src detector weight from BG spline -> Detector exposition
+        # for every src position. Background expects recarray with field
+        # 'sinDec' so create it first
+        src_sin_dec = np.zeros((self._nsrcs, ), dtype=[("sinDec", np.float)])
+        src_sin_dec["sinDec"] = np.sin(src["dec"])
+        src_dec_w = self.llh_model.background(src_sin_dec)
+
+        # Normalize weights: Total = (Acceptance * Theoretical Weight) / Sum
+        norm_w = src_dec_w * src["weight"]
+        norm_w = norm_w / np.sum(norm_w)
+
+        # Add norm. total weights and detector decl. weights for later use
+        src = np.lib.recfunctions.append_fields(
+            src, "normw", norm_w, dtypes=np.float, usemask=False)
+        src = np.lib.recfunctions.append_fields(
+            src, "decw", src_dec_w, dtypes=np.float, usemask=False)
+        self._src = src
+
+        # Give the llh model the src map to make a single src map pdf
+        self.llh_model._make_spatial_pdf_map(src)
+
+        return
+
+
+    def reset_map_cache(self):
+        r"""Not using cached maps in the distributed version."""
+        raise NotImplementedError(
+            "`reset_map_cache` is not used in the distributed version.")
+        return
