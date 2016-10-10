@@ -73,12 +73,6 @@ _par_val = np.nan
 _parab_cache = np.zeros((0, ), dtype=[("S1", np.float), ("a", np.float),
                                       ("b", np.float)])
 
-##############################################################################
-## HealpyLLH variable defaults
-_spatial_pdf_map = None
-_cached_maps = None
-##############################################################################
-
 
 class NullModel(object):
     r"""Base class of models for likelihood fitting, this defines every core
@@ -911,40 +905,6 @@ class HealpyLLH(ClassicLLH):
     Spatial signal pdfs are described by healpy maps which gets folded with the
     event sigma to create a combined directional pdf for each event.
     """
-    # Default values for HealpyLLH class. Can be overwritten in constructor
-    # by setting the attribute as keyword argument
-    _spatial_pdf_map = _spatial_pdf_map
-    _cached_maps = _cached_maps
-
-    # INTERNAL METHODS
-    def _cache_maps(self, exp, mc, src):
-        r"""
-        Cache maps for fast signal calculation.
-
-        exp, mc : record arrays
-            Data, MC from psLLH.
-        src : record array
-            Record array containing the source information. Needed fields are
-            sigma : array
-                Valid healpy map containing the spatial source pdf.
-            normw : Float
-                Containing the normed total weight per soruce. The total
-                weight is the theoretical and the detector weight the
-                source.
-        """
-        # First make single source spatial pdf by adding weighted maps
-        self._spatial_pdf_map = self._make_spatial_pdf_map(src)
-
-        # Cache maps with every exp/mc event sigma
-        print("Start caching exp and mc maps. This may take a while.")
-        sigma = np.append(exp["sigma"], mc["sigma"])
-        self.cached_maps = np.array(self._convolve_maps(
-            self._spatial_pdf_map, sigma))
-        print("Done caching {} exp and mc maps:".format(len(self.cached_maps)))
-        print("  exp maps : {}\n  mc  maps : {}".format(len(exp), len(mc)))
-
-        return
-
     def _make_spatial_pdf_map(self, src):
         r"""
         Wrapper to make a spatial src map pdf from maps and weights.
@@ -969,23 +929,6 @@ class HealpyLLH(ClassicLLH):
         self._spatial_pdf_map = amp_hp.norm_healpy_map(added_map)
         return self._spatial_pdf_map
 
-    def _convolve_maps(self, m, sigma):
-        """
-        This function does:
-        1. Smooth the given map m with every given sigma (aka gaussian
-           convolution). Progress is tracked with tqdm because this may take
-           a while.
-        2. After convolution make a pdf from every map
-        3. Put everything in an array and return that
-        """
-        convolved_maps = np.array(
-            [amp_hp.norm_healpy_map(
-                hp.smoothing(m, sigma=sigma_evi, verbose=False)
-                )
-            for sigma_evi in tqdm(sigma)]
-            )
-        return convolved_maps
-
     def _add_weighted_maps(self, m, w):
         """
         Add weighted healpy maps. Lenght of maps m and weights w must match.
@@ -997,21 +940,6 @@ class HealpyLLH(ClassicLLH):
         if len(w) != len(m):
             raise ValueError("Lenghts of map and weight vector don't match.")
         return np.sum(m * w)
-
-
-    # PROPERTIES for public variables using getters and setters
-    @property
-    def cached_maps(self):
-        # Smoothed healpy maps are cached for every event beforehand to shorten
-        # signal computation
-        return self._cached_maps
-    @cached_maps.setter
-    def cached_maps(self, maps):
-        # This will throw a TypeError, if maps are not valid hp maps
-        hp.maptype(maps)
-        self._cached_maps = maps
-        return
-
 
     # PUBLIC METHODS
     def signal(self, ev):
@@ -1061,13 +989,3 @@ class HealpyLLH(ClassicLLH):
         S = [maps[i][k] for i, k in enumerate(pixind)]
 
         return np.array(S)
-
-
-    def reset_map_cache(self):
-        r"""
-        Reset all cached maps. Resetting the map cache has its own function
-        to not interfere with the usual reset, which is for selecting events
-        and weights.
-        """
-        self._cached_maps = _cached_maps
-        return
