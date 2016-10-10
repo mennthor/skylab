@@ -79,11 +79,6 @@ _spatial_pdf_map = None
 _cached_maps = None
 ##############################################################################
 
-##############################################################################
-## DistributedHealpyLLH variable defaults
-_NCORES = 1000
-##############################################################################
-
 
 class NullModel(object):
     r"""Base class of models for likelihood fitting, this defines every core
@@ -915,10 +910,6 @@ class HealpyLLH(ClassicLLH):
 
     Spatial signal pdfs are described by healpy maps which gets folded with the
     event sigma to create a combined directional pdf for each event.
-
-    This version uses map caching. This will only work for few lower resolution
-    maps, eg. for testing purposes. Use `DistributedHealpyLLH` on a cluster for
-    many events and high resolution maps.
     """
     # Default values for HealpyLLH class. Can be overwritten in constructor
     # by setting the attribute as keyword argument
@@ -942,13 +933,13 @@ class HealpyLLH(ClassicLLH):
                 source.
         """
         # First make single source spatial pdf by adding weighted maps
-        _spatial_pdf_map = self._make_spatial_pdf_map(src)
+        self._spatial_pdf_map = self._make_spatial_pdf_map(src)
 
         # Cache maps with every exp/mc event sigma
         print("Start caching exp and mc maps. This may take a while.")
         sigma = np.append(exp["sigma"], mc["sigma"])
         self.cached_maps = np.array(self._convolve_maps(
-            _spatial_pdf_map, sigma))
+            self._spatial_pdf_map, sigma))
         print("Done caching {} exp and mc maps:".format(len(self.cached_maps)))
         print("  exp maps : {}\n  mc  maps : {}".format(len(exp), len(mc)))
 
@@ -1071,6 +1062,7 @@ class HealpyLLH(ClassicLLH):
 
         return np.array(S)
 
+
     def reset_map_cache(self):
         r"""
         Reset all cached maps. Resetting the map cache has its own function
@@ -1079,152 +1071,3 @@ class HealpyLLH(ClassicLLH):
         """
         self._cached_maps = _cached_maps
         return
-
-
-############################################################################
-## DistributedHealpyLLH
-############################################################################
-class DistributedHealpyLLH(HealpyLLH):
-    r"""
-    Extending the ClassicLLH model to be able to use stacking and handle
-    extended sources by using healpy maps as spatial signal pdfs.
-
-    The signal pdf gets modified according to the stacking ansatz described in
-    `Astr.Phys.J. 636:680-684, 2006 <http://arxiv.org/abs/astro-ph/0507120>`_.
-    The likelihood function from ClassicLLH is extended through
-
-    .. math::
-
-       \mathcal{L} = \prod_i\left(\frac{n_s}{N}\mathcal{S}^\mathrm{tot}
-                     + \left(1-\frac{n_s}{N}\right)\mathcal{B}\right)
-
-    with the stacked signal term
-
-    .. math:: \mathcal{S}^{tot} = \frac{\sum W^j R^j S_i^j}{\sum W^j R^j}
-
-    Spatial signal pdfs are described by healpy maps which gets folded with the
-    event sigma to create a combined directional pdf for each event.
-
-    This is the dirstributed version, using no caching but uses many cores on
-    a cluster to simulataniously calculate the signal llh function.
-
-    This signal function distributes the signal calculation on many cluster
-    cores to make it faster. All given events are split in small chunks
-    and then for each chunk the llh is calculated independently on a single
-    core.
-
-    Each time the src_map is smoothed with the events sigma and the llh at
-    the events position is returned. The smoothing time depends on the map
-    NSIDE resolution and takes something like ~10sec per map with
-    NSIDE=512.
-
-    The chunksize is controlled by the NCORES parameter given to the class.
-    The event sample is split evenly across the NCORES.
-    """
-    # Default values for HealpyLLH class. Can be overwritten in constructor
-    # by setting the attribute as keyword argument
-    _spatial_pdf_map = _spatial_pdf_map
-    _NCORES = _NCORES
-
-    # INTERNAL METHODS
-    def _split_event_sample(self, arr):
-        """
-        Split the input array in equal chunks plus a leftover chunk with
-        smaller length. The chunksize is determined by the number of cores we
-        distribute the signal calculation. Each core gets the same chunk size
-        (and one core the smaller part).
-
-        Retrieve the original array with `np.concatenate(chunks)`.
-
-        Returns
-        -------
-        chunks : list of arrays
-            The input array chunked up in int(len(arr)/NCORES) parts. Plus 1
-            part, if arr could not be split evenly.
-        """
-        # Split arrays in evenly length chunks and on end piece
-        splits = int(len(arr) / float(self.NCORES))
-        # This is the index up to which split works
-        endidx = int(self.NCORES * splits)
-        # Split the first part. This returned as a list
-        chunks = np.split(arr[:endidx], splits)
-        # Leftover part only exists, if array can't be split evenly
-        if not endidx == len(arr):
-            leftover_chunk = arr[endidx:]
-            chunks.append(leftover_chunk)
-
-        return chunks
-
-
-    # PROPERTIES for public variables using getters and setters
-    @property
-    def NCORES(self):
-        return self._NCORES
-    @NCORES.setter
-    def NCORES(self, val):
-        val = int(val)
-        if val < 1:
-            raise ValueError("Number of cores must be at least 1.")
-        self._NCORES = val
-        return
-
-    # PUBLIC METHODS
-    def signal(self, ev):
-        r"""
-        Spatial probability of each event i coming from extended source j.
-        For each event a combinded source map is created and the spatial
-        signal values is the value of this maps at the events position.
-
-        The events are distributed evenly on NCORES. Then the signal is
-        calculated parallel on multiple cores and later collected.
-        Outside classes just call this function and get the signal value
-        returned as expected.
-
-        Get information on distributed computing in the
-        `DAGman documentation <http://research.cs.wisc.edu/htcondor/manual/latest/2_10DAGMan_Applications.html>`_.
-
-        Parameters
-        -----------
-        ev : structured array
-            Event array, import information: dec, ra, sigma. Combined events
-            from exp and mc, selected in the `psLLH._select_events()` internal
-            method.
-
-        Returns
-        --------
-        S : array-like
-            Spatial signal probability for each event in ev.
-        """
-        # Chunk up the event array
-        chunks = self._split_event_sample(ev)
-
-        # Start new DAGman job for every chunk
-        # In each job the src_map is smoothed with the events sigma and and the
-        # signal values is saved for every event
-        for chunk in chunks:
-            start_signal_job(chunk)
-
-        # Wait for all jobs to complete and collect all signal values
-        for chunk in chunks:
-            collect_signals()
-
-        return np.array(S)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
