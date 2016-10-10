@@ -948,9 +948,8 @@ class HealpyLLH(ClassicLLH):
         Spatial probability of each event i coming from extended source j.
         For each event a combinded source map is created and the spatial
         signal values is the value of this maps at the events position.
-        To ensure fast execution for every event, each map is folded with the
-        events sigma beforehand in the `_select_events()` internal method in
-        the `psLLH` class.
+        To ensure fast execution for every event, only the single pixel at
+        each events position is folded in pixel space with a clipped kernel.
 
         Parameters
         -----------
@@ -958,35 +957,31 @@ class HealpyLLH(ClassicLLH):
             Event array, import information: dec, ra, sigma. Combined events
             from exp and mc, selected in the `psLLH._select_events()` internal
             method.
-            Field `idx` are selected events indices. This array selects the
-            correct cached map for the ith event in the given `ev` array.
 
         Returns
         --------
         S : array-like
             Spatial signal probability for each event in ev.
         """
-        # Check if we have cached exp maps, should always be the case
-        if self.cached_maps is None:
-            raise ValueError("We don't have cached maps, need to add sources"
-            + " first using `psLLH.use_source()`")
-
-        # Get IDs
-        ind = ev["idx"]
-
-        # Select the correct maps for the input events
-        maps = self.cached_maps[ind]
-
-        # Get all pdf values: first get pixel indices for the events in ev
-        NSIDE = hp.get_nside(maps[0])
-        NPIX = hp.nside2npix(NSIDE)
-        # Shift RA, DEC to healpy coordinates for proper use of pix indices
+        # Shift RA, DEC to healpy coordinates to use it in
+        #   single_pixel_gaussian_convolution()
         th, phi = amp_hp.DecRaToThetaPhi(ev["dec"], ev["ra"])
-        pixind = hp.ang2pix(NSIDE, th, phi)
 
-        # For every event get the correct spatial pdf signal value.
+        # Get smoothing sigma from every event
+        smooth_sigma = ev["sigma"]
+
+        # Clip kernel at clip*sigma
+        clip = 3.
+
+        # For every event get the single convolved pixel at its location.
         # Because the src maps were added with the weight beforehand, this
-        # already is the stacked llh value for the signal
-        S = [maps[i][k] for i, k in enumerate(pixind)]
+        # already is the stacked llh value for the signal for each event.
+        S = [
+            amp_hp.single_pixel_gaussian_convolution(
+                m=self._spatial_pdf_map, th=th_i, phi=phi_i,
+                sigma=smooth_sigma_i, clip=clip
+            )
+            for th_i, phi_i, smooth_sigma_i in zip(th, phi, smooth_sigma)
+        ]
 
         return np.array(S)
