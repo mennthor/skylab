@@ -33,13 +33,11 @@ from . import set_pars
 from .utils import kernel_func
 
 ############################################################################
-## HealpyLLH extra imports
-import healpy as hp
-# Status bar for long caching of healpy maps
-from tqdm import tqdm
-# My analysis tools
+# HealpyLLH extra imports
+# - My analysis tools
 import anapymods.healpy as amp_hp
 ############################################################################
+
 
 # get module logger
 def trace(self, message, *args, **kwargs):
@@ -47,6 +45,7 @@ def trace(self, message, *args, **kwargs):
     """
     if self.isEnabledFor(5):
         self._log(5, message, args, **kwargs)
+
 
 logging.addLevelName(5, "TRACE")
 logging.Logger.trace = trace
@@ -882,7 +881,7 @@ class EnergyLLHfixed(EnergyLLH):
 
 
 ############################################################################
-## HealpyLLH
+# HealpyLLH
 ############################################################################
 class HealpyLLH(ClassicLLH):
     r"""
@@ -902,8 +901,8 @@ class HealpyLLH(ClassicLLH):
 
     .. math:: \mathcal{S}^{tot} = \frac{\sum W^j R^j S_i^j}{\sum W^j R^j}
 
-    Spatial signal pdfs are described by healpy maps which gets folded with the
-    event sigma to create a combined directional pdf for each event.
+    Spatial signal pdfs are described by healpy maps which gets folded with
+    the event sigma to create a combined directional pdf for each event.
     """
     def _make_spatial_pdf_map(self, src):
         r"""
@@ -963,7 +962,7 @@ class HealpyLLH(ClassicLLH):
             Spatial signal probability for each event in ev.
         """
         # Shift RA, DEC to healpy coordinates to use it in
-        #   single_pixel_gaussian_convolution()
+        # single_pixel_gaussian_convolution().
         th, phi = amp_hp.DecRaToThetaPhi(ev["dec"], ev["ra"])
 
         # Get smoothing sigma from every event
