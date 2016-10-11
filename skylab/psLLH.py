@@ -2373,7 +2373,7 @@ class HealpyLLH(PointSourceLLH):
         return self.llh_model._spatial_pdf_map
 
     # PUBLIC methods
-    def use_sources(self, src, reset_cache=True):
+    def use_sources(self, src):
         r"""
         Use this function to give a list of sources prior to calculating
         anything. This is different to the standard PointSourceLLH in which
@@ -2398,9 +2398,6 @@ class HealpyLLH(PointSourceLLH):
         """
         # Reset all previously cached values and the map cache
         self.reset()
-        if reset_cache:
-            # This triggers caching below whne requested by the user
-            self.reset_map_cache()
 
         # Sanity checks
         # Check if src recarray has all needed names
@@ -2446,7 +2443,7 @@ class HealpyLLH(PointSourceLLH):
             src, "decw", src_dec_w, dtypes=np.float, usemask=False)
         self._src = src
 
-        # Make spatial src_map to use it later in injector module if needed
+        # Make spatial src_map
         self.llh_model._make_spatial_pdf_map(src)
 
         return
