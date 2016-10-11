@@ -904,6 +904,9 @@ class HealpyLLH(ClassicLLH):
     Spatial signal pdfs are described by healpy maps which gets folded with
     the event sigma to create a combined directional pdf for each event.
     """
+    # Clip kernel at clip*sigma
+    _clip = 3.
+
     def _make_spatial_pdf_map(self, src):
         r"""
         Wrapper to make a spatial src map pdf from maps and weights.
@@ -968,16 +971,13 @@ class HealpyLLH(ClassicLLH):
         # Get smoothing sigma from every event
         smooth_sigma = ev["sigma"]
 
-        # Clip kernel at clip*sigma
-        clip = 3.
-
         # For every event get the single convolved pixel at its location.
         # Because the src maps were added with the weight beforehand, this
-        # already is the stacked llh value for the signal for each event.
+        # already is the stacked signal llh value for each event.
         S = [
             amp_hp.single_pixel_gaussian_convolution(
                 m=self._spatial_pdf_map, th=th_i, phi=phi_i,
-                sigma=smooth_sigma_i, clip=clip
+                sigma=smooth_sigma_i, clip=self._clip
             )
             for th_i, phi_i, smooth_sigma_i in zip(th, phi, smooth_sigma)
         ]
