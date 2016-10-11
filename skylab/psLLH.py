@@ -38,18 +38,12 @@ import numpy.lib.recfunctions
 import scipy.interpolate
 import scipy.optimize
 import scipy.stats
-from scipy.signal import convolve2d
 
 # local package imports
 from . import set_pars
 from . import ps_model
 from . import utils
 
-##############################################################################
-## HealpyLLH extra imports
-# My analysis tools
-import anapymods.healpy as amp_hp
-##############################################################################
 
 # get module logger
 def trace(self, message, *args, **kwargs):
@@ -58,6 +52,7 @@ def trace(self, message, *args, **kwargs):
     """
     if self.isEnabledFor(5):
         self._log(5, message, args, **kwargs)
+
 
 logging.addLevelName(5, "TRACE")
 logging.Logger.trace = trace
@@ -2120,7 +2115,7 @@ def fs(args):
 
 
 ############################################################################
-## HealpyLLH
+# HealpyLLH
 ############################################################################
 class HealpyLLH(PointSourceLLH):
     r"""
@@ -2161,9 +2156,8 @@ class HealpyLLH(PointSourceLLH):
     _nsrcs = _nsrcs
     _ev_ind = _ev_ind
 
-
-    def __init__(
-        self, exp, mc, livetime, scramble=True, upscale=False, **kwargs):
+    def __init__(self, exp, mc, livetime,
+                 scramble=True, upscale=False, **kwargs):
         r"""
         Catches 'llh_model' keyword given and sets it to `HealpyLLH`.
         Passes the rest to super class init.
@@ -2180,14 +2174,16 @@ class HealpyLLH(PointSourceLLH):
         kwargs["mode"] = "all"
 
         # Give the exp an additional ID to select correct cached maps later
-        if not "idx" in exp.dtype.fields:
+        if "idx" not in exp.dtype.fields:
             exp = np.copy(numpy.lib.recfunctions.append_fields(
                 exp, "idx", np.arange(len(exp)), dtypes=np.int, usemask=False))
 
         # Make MC class variable and add sinDec field
-        if not "sinDec" in mc.dtype.fields:
+        if "sinDec" not in mc.dtype.fields:
             self.mc = numpy.lib.recfunctions.append_fields(
-                mc, "sinDec", np.sin(mc["dec"]), dtypes=np.float, usemask=False)
+                mc, "sinDec", np.sin(mc["dec"]),
+                dtypes=np.float, usemask=False
+            )
 
         super(HealpyLLH, self).__init__(
             exp, self.mc, livetime, scramble, upscale, **kwargs)
@@ -2219,7 +2215,6 @@ class HealpyLLH(PointSourceLLH):
         sout += 67 * "-" + "\n"
 
         return sout
-
 
     # INTERNAL METHODS
     def _select_events(self, src_ra=np.nan, src_dec=np.nan, **kwargs):
@@ -2267,7 +2262,7 @@ class HealpyLLH(PointSourceLLH):
             raise ValueError("exp['idx'] are not valid IDs.")
 
         # Double check if mode is 'all'
-        if self.mode == "all" :
+        if self.mode == "all":
             # all events are selected
             exp_mask = np.ones_like(self.exp["sinDec"], dtype=np.bool)
 
@@ -2304,10 +2299,13 @@ class HealpyLLH(PointSourceLLH):
         # self._src_dec = src_dec
 
         if inject is not None:
-            self._ev = np.append(self._ev,
+            self._ev = np.append(
+                self._ev,
                 numpy.lib.recfunctions.append_fields(
                     inject, "B", self.llh_model.background(inject),
-                    usemask=False))
+                    usemask=False
+                )
+            )
             # Append injected event indices and start the inj counter after
             # the last exp ID, because maps are cached in this fashion
             self._ev_ind = np.append(
@@ -2328,19 +2326,19 @@ class HealpyLLH(PointSourceLLH):
         # set number of selected events
         self._n = len(self._ev)
 
-        if (self._n < 1
-            and (np.sin(self._src_dec) < self.sinDec_range[0]
-                 and np.sin(self._src_dec) > self.sinDec_range[-1])):
+        if (self._n < 1 and
+            (np.sin(self._src_dec) < self.sinDec_range[0] and
+                np.sin(self._src_dec) > self.sinDec_range[-1])):
             logger.error("No event was selected, fit will go to -infinity")
 
         return
-
 
     # PROPERTIES for public variables using getters and setters
     # LLH model setter only accepts HealpyLLH models
     @property
     def llh_model(self):
         return self._llh_model
+
     @llh_model.setter
     def llh_model(self, args):
         if len(args) != 2:
@@ -2357,6 +2355,7 @@ class HealpyLLH(PointSourceLLH):
     @property
     def mode(self):
         return self._mode
+
     @mode.setter
     def mode(self, val):
         if val != "all":
@@ -2368,7 +2367,6 @@ class HealpyLLH(PointSourceLLH):
     @property
     def spatial_pdf_map(self):
         return self.llh_model._spatial_pdf_map
-
 
     # PUBLIC methods
     def use_sources(self, src, reset_cache=True):
@@ -2403,7 +2401,7 @@ class HealpyLLH(PointSourceLLH):
         # Sanity checks
         # Check if src recarray has all needed names
         names = ["ra", "dec", "weight", "sigma"]
-        if not all (k in src.dtype.names for k in names):
+        if not all(k in src.dtype.names for k in names):
             raise KeyError(
                 "src array must have names 'ra', 'dec', 'weight' and 'sigma'")
 
@@ -2412,9 +2410,10 @@ class HealpyLLH(PointSourceLLH):
             raise ValueError("Healpy maps in 'sigma' field not valid.")
 
         # Check if coordinates are valid equatorial coordinates in radians
-        if np.any(src["ra"] < 0) or np.any(src["ra"] > 2*np.pi):
+        if np.any(src["ra"] < 0) or np.any(src["ra"] > 2 * np.pi):
             raise ValueError("RA value(s) not valid equatorial coordinates")
-        if np.any(src["dec"] < -np.pi/2.) or np.any(src["dec"] > +np.pi/2.):
+        if (np.any(src["dec"] < -np.pi / 2.) or
+                np.any(src["dec"] > +np.pi / 2.)):
             raise ValueError("DEC value(s) not valid equatorial coordinates")
 
         # Zero weight makes no sense
@@ -2443,19 +2442,8 @@ class HealpyLLH(PointSourceLLH):
             src, "decw", src_dec_w, dtypes=np.float, usemask=False)
         self._src = src
 
-        # Cache smoothed llh maps if there are none
-        if self.llh_model.cached_maps is None:
-            # If user thought there was a cache but there is none, tell him
-            if not reset_cache:
-                print("'reset_cache=False' given, but no cache found. "
-                      "Have to recache maps.")
-            self.llh_model._cache_maps(self.exp, self.mc, self._src)
-        else:
-            print("Cached maps are available, not caching again. "
-                  "The user is responsible that the existing cache is OK. "
-                  "If unsure call use_sources() with `reset_cache=True`.")
-            # Even if cache is there, update the src_map info manually
-            self.llh_model._make_spatial_pdf_map(src)
+        # Make spatial src_map to use it later in injector module if needed
+        self.llh_model._make_spatial_pdf_map(src)
 
         return
 
@@ -2592,11 +2580,6 @@ class HealpyLLH(PointSourceLLH):
         super(HealpyLLH, self).reset()
         return
 
-    def reset_map_cache(self):
-        r"""Reset all cached maps in `llh_model`."""
-        self.llh_model.reset_map_cache()
-        return
-
     # NOT IMPLEMENTED in a stacked search.
     def all_sky_scan(self, **kwargs):
         r"""
@@ -2621,4 +2604,3 @@ class HealpyLLH(PointSourceLLH):
         raise NotImplementedError(
             "`fit_source_loc` is not used in a stacked search.")
         return
-
