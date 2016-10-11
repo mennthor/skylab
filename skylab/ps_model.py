@@ -975,12 +975,20 @@ class HealpyLLH(ClassicLLH):
         # For every event get the single convolved pixel at its location.
         # Because the src maps were added with the weight beforehand, this
         # already is the stacked signal llh value for each event.
-        S = [
-            amp_hp.single_pixel_gaussian_convolution(
-                m=self._spatial_pdf_map, th=th_i, phi=phi_i,
-                sigma=smooth_sigma_i, clip=self._clip
+        S = []
+        for th_i, phi_i, smooth_sigma_i in zip(th, phi, smooth_sigma):
+            S.append(
+                amp_hp.single_pixel_gaussian_convolution(
+                    m=self._spatial_pdf_map, th=th_i, phi=phi_i,
+                    sigma=smooth_sigma_i, clip=self._clip
+                )
             )
-            for th_i, phi_i, smooth_sigma_i in zip(th, phi, smooth_sigma)
-        ]
+        # S = [
+        #     amp_hp.single_pixel_gaussian_convolution(
+        #         m=self._spatial_pdf_map, th=th_i, phi=phi_i,
+        #         sigma=smooth_sigma_i, clip=self._clip
+        #     )
+        #     for th_i, phi_i, smooth_sigma_i in zip(th, phi, smooth_sigma)
+        # ]
 
         return np.array(S)
