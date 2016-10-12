@@ -2378,8 +2378,10 @@ class HealpyLLH(PointSourceLLH):
         Use this function to give a list of sources prior to calculating
         anything. This is different to the standard PointSourceLLH in which
         each function gets a single source in the argument.
-        Here we use this way to cache time intensive healpy map smoothing
-        beforehand.
+
+        Here we calculate each sources detector acceptance weight using the
+        background spline from data and combine all source maps to a single
+        spatial source map, to speed up signal evaluation.
 
         Parameters
         ----------
@@ -2392,9 +2394,6 @@ class HealpyLLH(PointSourceLLH):
                List of healpy maps. The maps are convolved with a gaussian with
                the reconstruction sigma of each event and used as the spatial
                pdf for each event. (dtype is object or numpy.ndarray)
-        reset_cache : bool
-            Wether to reset the map cache of the llh_model. Setting this to
-            True will trigger recaching of all maps.
         """
         # Reset all previously cached values and the map cache
         self.reset()
@@ -2513,8 +2512,8 @@ class HealpyLLH(PointSourceLLH):
         return super(HealpyLLH, self).do_trials(
             src_ra=np.nan, src_dec=np.nan, **kwargs)
 
-    def weighted_sensitivity(
-        self, alpha, beta, inj, mc, src_ra=np.nan, src_dec=np.nan, **kwargs):
+    def weighted_sensitivity(self, alpha, beta, inj, mc,
+                             src_ra=np.nan, src_dec=np.nan, **kwargs):
         r"""
         Calculate the point source sensitivity for a given source
         hypothesis using weights.
