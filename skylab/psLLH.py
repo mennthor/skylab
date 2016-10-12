@@ -2155,11 +2155,6 @@ class HealpyLLH(PointSourceLLH):
     _ev = _ev
     _ev_S = _ev_S
 
-    # Healpy map caching
-    _src = _src
-    _nsrcs = _nsrcs
-    _ev_ind = _ev_ind
-
     def __init__(self, exp, mc, livetime,
                  scramble=True, upscale=False, **kwargs):
         r"""
@@ -2237,25 +2232,15 @@ class HealpyLLH(PointSourceLLH):
             Scramble rightascension of exp events prior to selection.
         inject : numpy_structured_array
             Events to add to the selected events, fields equal to exp. data.
-        inj_ind : int array
-            Indices for injected events. `mc[ind]` gives the original events
-            sampled from mc in the ps_injector.
-            Is used to assign cached maps to injected events.
         """
+        # Get kwargs
         scramble = kwargs.pop("scramble", False)
-        inject = kwargs.pop("inject", None)
+        inj = kwargs.pop("inject", None)
         if kwargs:
             raise ValueError("Don't know arguments", kwargs.keys())
 
         # reset
         self.reset()
-
-        # get the zenith band with correct boundaries
-        # dec = (np.pi - 2. * self.delta_ang) / np.pi * src_dec
-        # min_dec = max(-np.pi / 2., dec - self.delta_ang)
-        # max_dec = min(np.pi / 2., dec + self.delta_ang)
-
-        # dPhi = 2. * np.pi
 
         # number of total events
         self._N = len(self.exp)
@@ -2269,12 +2254,6 @@ class HealpyLLH(PointSourceLLH):
         if self.mode == "all":
             # all events are selected
             exp_mask = np.ones_like(self.exp["sinDec"], dtype=np.bool)
-
-        # elif self.mode in ["band", "box"]:
-        #     # get events that are within the declination band
-        #     exp_mask = ((self.exp["sinDec"] > np.sin(min_dec))
-        #                 & (self.exp["sinDec"] < np.sin(max_dec)))
-
         else:
             raise ValueError("Not supported mode: {0:s}".format(self.mode))
 
@@ -2286,36 +2265,16 @@ class HealpyLLH(PointSourceLLH):
             self._ev["ra"] = self.random.uniform(0., 2. * np.pi,
                                                  size=len(self._ev))
 
-        # selection in rightascension
-        # if self.mode == "box":
-        #     # the solid angle dOmega = dRA * dSinDec = dRA * dDec * cos(dec)
-        #     # is a function of declination, i.e., for a constant dOmega,
-        #     # the rightascension value has to change with declination
-        #     cosFact = np.amin(np.cos([min_dec, max_dec]))
-        #     dPhi = np.amin([2. * np.pi, 2. * self.delta_ang / cosFact])
-        #     ra_dist = np.fabs((self._ev["ra"] - src_ra + np.pi) % (2. * np.pi)
-        #                       - np.pi)
-        #     mask = ra_dist < dPhi/2.
-
-        #     self._ev = self._ev[mask]
-
-        # self._src_ra = src_ra
-        # self._src_dec = src_dec
-
-        if inject is not None:
+        if inj is not None:
             self._ev = np.append(
                 self._ev,
                 numpy.lib.recfunctions.append_fields(
-                    inject, "B", self.llh_model.background(inject),
+                    inj, "B", self.llh_model.background(inj),
                     usemask=False
                 )
             )
-            # Append injected event indices and start the inj counter after
-            # the last exp ID, because maps are cached in this fashion
-            self._ev_ind = np.append(
-                self._ev_ind, self._ev_ind[-1] + inject["idx"])
             # Update total event number
-            self._N += len(inject)
+            self._N += len(inj)
 
         # calculate signal term
         self._ev_S = self.llh_model.signal(self._ev)
@@ -2324,8 +2283,6 @@ class HealpyLLH(PointSourceLLH):
         ev_mask = self._ev_S > self.thresh_S
         self._ev = self._ev[ev_mask]
         self._ev_S = self._ev_S[ev_mask]
-        # Update indices too
-        self._ev_ind = self._ev_ind[ev_mask]
 
         # set number of selected events
         self._n = len(self._ev)
