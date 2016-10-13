@@ -47,11 +47,12 @@ from . import set_pars
 from .utils import rotate
 
 ############################################################################
-## HealpyLLH extra imports
+# HealpyLLH extra imports
 import healpy as hp
 # My analysis tools
 import anapymods.healpy as amp_hp
 ############################################################################
+
 
 # get module logger
 def trace(self, message, *args, **kwargs):
@@ -61,6 +62,7 @@ def trace(self, message, *args, **kwargs):
     if self.isEnabledFor(5):
         self._log(5, message, args, **kwargs)
 
+
 logging.addLevelName(5, "TRACE")
 logging.Logger.trace = trace
 
@@ -69,6 +71,7 @@ logger.addHandler(logging.StreamHandler())
 
 _deg = 4
 _ext = 3
+
 
 def rotate_struct(ev, ra, dec):
     r"""Wrapper around the rotate-method in skylab.utils for structured
@@ -639,38 +642,40 @@ class HealpyInjector(PointSourceInjector):
     _random = np.random.RandomState()
     _seed = None
 
-
-    def __init__(self, src, **kwargs):
+    def __init__(self, src_map, **kwargs):
         """
-        Set src array as a attribute so we can use it for the `sample()`
-        function.
-
-        Also explicitely init 'sinDec_range' and 'sinDec_bandwidth' to set all
-        dependent vars.
+        Set src_map array as a calss attribute so we can use it for the
+        `sample()` function.
 
         Parameters
         ----------
-        src is a numpy record array with the following fields needed:
-            norm_w : array
-                Total normed weight for each source. This includes theoretical
-                and detector acceptance weight for each source. This field is
-                calculated in the psLLH.HealpyLLH.use_sources()` function.
-            sigma : array
-               List of healpy maps. The maps are convolved with a gaussian with
-               the reconstruction sigma of each event and used as the spatial
-               pdf for each event. (dtype is object or numpy.ndarray)
+        src_map : valid healpy map
+            The full source all sky spatial pdf map. Can be constructed by
+            adding all map per source according to their weights. Then we
+            get a single map containing the all sky spatial pdf.
+
+        Other Parameters
+        ----------------
+        sinDec_bandwidth : float
+            Gives the declination band in sin(dec) from which MC events are
+            selected in  `sample()` function around a drawn source location.
+            If small, only events from nearly the same declination as a
+            selected source position are injected. The larger, the more
+            distant events gets rotated to the soource locatiuon and injected.
+            Needs to be set, so that injected events are still representative
+            in the declination band.
         """
-        self.src = src
+        self.src_map = src_map
 
         self.sinDec_bandwidth = kwargs.pop(
             "sinDec_bandwidth", self._sinDec_bandwidth)
 
-        # Set solid angle and some other fixed stuff
+        # Those are fixed in this class and get set once here, because we
+        # always sample on the whole sky (4pi)
         self._min_sinDec = self._sinDec_range[0]
         self._max_sinDec = self._sinDec_range[1]
         self._min_dec = np.arcsin(self._min_sinDec)
         self._max_dec = np.arcsin(self._max_sinDec)
-        # Should always be 4pi
         self._omega = 2. * np.pi * (self._max_sinDec - self._min_sinDec)
 
         super(HealpyInjector, self).__init__(**kwargs)
@@ -682,38 +687,42 @@ class HealpyInjector(PointSourceInjector):
         regarding the Injector class.
         Removed `src_dec` as it is not needed here.
         """
-        sout = ("\n{:s}\n"+
-                67*"-"+"\n"+
-                "\tSpectral index     : {:6.2f}\n"+
+        sout = ("\n{:s}\n" +
+                67 * "-" + "\n" +
+                "\tSpectral index     : {:6.2f}\n" +
                 "\tsinDec bandwidth   : {:5.1f}°\n"
                 "\tlog10 Energy range : {:5.1f} to {:5.1f}\n").format(
-                         self.__repr__(), self.gamma,
-                         np.rad2deg(np.arcsin(self.sinDec_bandwidth)),
-                         *self.e_range)
-        sout += 67*"-"
+                    self.__repr__(), self.gamma,
+                    np.rad2deg(np.arcsin(self.sinDec_bandwidth)),
+                    *self.e_range)
+        sout += 67 * "-"
         return sout
-
 
     # PROPERTIES
     # Overwrite some unused setters
     @property
     def sinDec_range(self):
         return self._sinDec_range
+
     @sinDec_range.setter
     def sinDec_range(self, val):
         print("sinDec_range is always [-1,+1] in HealpyInjector. Skipping.")
         return
+
     @property
     def src_dec(self):
         return self._src_dec
+
     @src_dec.setter
     def src_dec(self, val):
         print("src_dec is not used in HealpyInjector. Skipping.")
         return
+
     # Remove calling _setup() from sinDec_bandwidth setter. _omega stays 4pi
     @property
     def sinDec_bandwidth(self):
         return self._sinDec_bandwidth
+
     @sinDec_bandwidth.setter
     def sinDec_bandwidth(self, val):
         if val < 0. or val > 1.:
@@ -722,112 +731,117 @@ class HealpyInjector(PointSourceInjector):
         self._sinDec_bandwidth = float(val)
         self._dec_bandwidth = np.arcsin(self._sinDec_bandwidth)
         return
+
     # The source recarray must be a class attribute to stay consistent with
     # the `fill()` function call
     @property
-    def src(self):
-        return self._src
-    @src.setter
-    def src(self, src):
-       self._src = src
-       return
+    def src_map(self):
+        return self._src_map
 
-
+    @src_map.setter
+    def src_map(self, src_map):
+        if hp.maptype(src_map) != 0:
+            raise ValueError(
+                "Given src_map is not a single, valid healpy map.")
+        self._src_map = src_map
+        return
 
     # PUBLIC METHODS
     def fill(self, src_dec, mc, livetime):
-        r"""
-        Fill the Injector with MonteCarlo events by sampling event positions
-        from the spatial source map. Those positions are assigned to MC events
-        in the same declination band as the sampled event corresponding to
-        the events weight.
+        return super(HealpyInjector, self).fill(
+            src_dec=np.nan, mc=mc, livetime=livetime)
+    # def fill(self, src_dec, mc, livetime):
+    #     r"""
+    #     Fill the Injector with MonteCarlo events by sampling event positions
+    #     from the spatial source map. Those positions are assigned to MC events
+    #     in the same declination band as the sampled event corresponding to
+    #     the events weight.
 
-        Only slightly adapted to not use 'src_dec' and added 'ra', dec' and
-        'idx' information to mc_arr, to use it in sample().
+    #     Only slightly adapted to not use 'src_dec' and added 'ra', dec' and
+    #     'idx' information to mc_arr, to use it in sample().
 
-        If multiple samples are given the dictionary must have the structure
-        `{key1:sample1, key2:sample2}` where keys are integers and samples are
-        record arrays. The same applies to livetimes: `{key1:livetime1, ...}`.
-        If only one sample is given as a record array it is internally
-        converted to a dictionary with `{-1 : mc}` and `{-1 : livetime}`.
+    #     If multiple samples are given the dictionary must have the structure
+    #     `{key1:sample1, key2:sample2}` where keys are integers and samples are
+    #     record arrays. The same applies to livetimes: `{key1:livetime1, ...}`.
+    #     If only one sample is given as a record array it is internally
+    #     converted to a dictionary with `{-1 : mc}` and `{-1 : livetime}`.
 
-        `src_dec` is kept as a dummy argument for compatibility but has
-        no effect.
+    #     `src_dec` is kept as a dummy argument for compatibility but has
+    #     no effect.
 
-        Parameters
-        -----------
-        mc : record array or dict of record arrays
-            Monte Carlo event sample or multiple samples.
-            Must be the same as the MC used in psLLH to cache the maps.
-        livetime : float or dict of floats
-            Livetime of the MC sample or mutliple samples.
-        """
-        if isinstance(mc, dict) ^ isinstance(livetime, dict):
-            raise ValueError("mc and livetime not compatible")
+    #     Parameters
+    #     -----------
+    #     mc : record array or dict of record arrays
+    #         Monte Carlo event sample or multiple samples.
+    #         Must be the same as the MC used in psLLH to cache the maps.
+    #     livetime : float or dict of floats
+    #         Livetime of the MC sample or mutliple samples.
+    #     """
+    #     if isinstance(mc, dict) ^ isinstance(livetime, dict):
+    #         raise ValueError("mc and livetime not compatible")
 
-        # enum * idx is a unique id for each event. In dicts the last key is
-        # valid if two identical keys are given.
-        self.mc = dict()
-        # Add dec information for use in sample() function
-        self.mc_arr = np.empty(0, dtype=[("idx", np.int), ("enum", np.int),
-                                         ("trueE", np.float), ("ow", np.float),
-                                         ("dec", np.float), ("ra", np.float)])
+    #     # enum * idx is a unique id for each event. In dicts the last key is
+    #     # valid if two identical keys are given.
+    #     self.mc = dict()
+    #     # Add dec information for use in sample() function
+    #     self.mc_arr = np.empty(0, dtype=[("idx", np.int), ("enum", np.int),
+    #                                      ("trueE", np.float), ("ow", np.float),
+    #                                      ("dec", np.float), ("ra", np.float)])
 
-        if not isinstance(mc, dict):
-            mc = {-1: mc}
-            livetime = {-1: livetime}
+    #     if not isinstance(mc, dict):
+    #         mc = {-1: mc}
+    #         livetime = {-1: livetime}
 
-        for key, mc_i in mc.iteritems():
-            # get MC event's in the selected energy and sinDec range
-            band_mask = ((np.sin(mc_i["trueDec"]) > np.sin(self._min_dec))
-                         &(np.sin(mc_i["trueDec"]) < np.sin(self._max_dec)))
-            band_mask &= ((mc_i["trueE"] / self.GeV > self.e_range[0])
-                          &(mc_i["trueE"] / self.GeV < self.e_range[1]))
+    #     for key, mc_i in mc.iteritems():
+    #         # get MC event's in the selected energy and sinDec range
+    #         band_mask = ((np.sin(mc_i["trueDec"]) > np.sin(self._min_dec)) &
+    #                      (np.sin(mc_i["trueDec"]) < np.sin(self._max_dec)))
+    #         band_mask &= ((mc_i["trueE"] / self.GeV > self.e_range[0]) &
+    #                       (mc_i["trueE"] / self.GeV < self.e_range[1]))
 
-            if not np.any(band_mask):
-                print("Sample {0:d}: No events were selected!".format(key))
-                self.mc[key] = mc_i[band_mask]
+    #         if not np.any(band_mask):
+    #             print("Sample {0:d}: No events were selected!".format(key))
+    #             self.mc[key] = mc_i[band_mask]
 
-                continue
+    #             continue
 
-            self.mc[key] = mc_i[band_mask]
+    #         self.mc[key] = mc_i[band_mask]
 
-            N = np.count_nonzero(band_mask)
-            mc_arr = np.empty(N, dtype=self.mc_arr.dtype)
-            mc_arr["idx"] = np.arange(N)
-            mc_arr["enum"] = key * np.ones(N)
-            mc_arr["ow"] = self.mc[key]["ow"] * livetime[key] * 86400.
-            mc_arr["trueE"] = self.mc[key]["trueE"]
-            # Add ra, dec information
-            mc_arr["ra"] = self.mc[key]["ra"]
-            mc_arr["dec"] = self.mc[key]["dec"]
+    #         N = np.count_nonzero(band_mask)
+    #         mc_arr = np.empty(N, dtype=self.mc_arr.dtype)
+    #         mc_arr["idx"] = np.arange(N)
+    #         mc_arr["enum"] = key * np.ones(N)
+    #         mc_arr["ow"] = self.mc[key]["ow"] * livetime[key] * 86400.
+    #         mc_arr["trueE"] = self.mc[key]["trueE"]
+    #         # Add ra, dec information
+    #         mc_arr["ra"] = self.mc[key]["ra"]
+    #         mc_arr["dec"] = self.mc[key]["dec"]
 
-            # Append 'idx' information to dict mc too to use it in sample()
-            self.mc[key] = np.lib.recfunctions.append_fields(
-                self.mc[key], "idx", mc_arr["idx"],
-                dtypes=np.int, usemask=False)
+    #         # Append 'idx' information to dict mc too to use it in sample()
+    #         self.mc[key] = np.lib.recfunctions.append_fields(
+    #             self.mc[key], "idx", mc_arr["idx"],
+    #             dtypes=np.int, usemask=False)
 
-            self.mc_arr = np.append(self.mc_arr, mc_arr)
+    #         self.mc_arr = np.append(self.mc_arr, mc_arr)
 
-            sout = (67 * "-" + "\nFill HealpyInjector info:"
-                    "  Sample {:s}: Selected {:6d} events\n"
-                    "    DEC : {:7.2f}° - {:7.2f}°\n"
-                    "    E   : {:7.2f} and {:7.2f} in {:7.2f} GeV").format(
-                        str(key), N,
-                        np.rad2deg(self._min_dec), np.rad2deg(self._max_dec),
-                        self.e_range[0], self.e_range[1], self.GeV)
-            print(sout)
+    #         sout = (67 * "-" + "\nFill HealpyInjector info:"
+    #                 "  Sample {:s}: Selected {:6d} events\n"
+    #                 "    DEC : {:7.2f}° - {:7.2f}°\n"
+    #                 "    E   : {:7.2f} and {:7.2f} in {:7.2f} GeV").format(
+    #                     str(key), N,
+    #                     np.rad2deg(self._min_dec), np.rad2deg(self._max_dec),
+    #                     self.e_range[0], self.e_range[1], self.GeV)
+    #         print(sout)
 
-        if len(self.mc_arr) < 1:
-            raise ValueError("Select no events at all")
+    #     if len(self.mc_arr) < 1:
+    #         raise ValueError("Select no events at all")
 
-        print("  Selected {0:d} events in total".format(len(self.mc_arr)))
-        print(67*"-")
+    #     print("  Selected {0:d} events in total".format(len(self.mc_arr)))
+    #     print(67 * "-")
 
-        self._weights()
+    #     self._weights()
 
-        return
-
+    #     return
 
     # def sample(self, mean_mu, src_map, poisson=True):
     def sample(self, src_ra, mean_mu, poisson=True):
@@ -862,13 +876,13 @@ class HealpyInjector(PointSourceInjector):
         def assign_and_drop(sam_ev, inj_ra, inj_dec):
             r"""
             Assign sampled ra/dec positions and drop mc fields from
-            injected sample.
+            injected sample. This replaces the rotate function in the
+            PointSourceInjector class.
             """
-            # Assign sampled locations from src map. This replaces the rotate
-            # function in PointSourceInjector
+            # Assign sampled locations from src map.
             sam_ev["ra"] = inj_ra
             sam_ev["dec"] = inj_dec
-            # MC names to drop from the injected events
+            # Drop MC fields from the injected events
             mc_names = ['ow', 'trueDec', 'trueE', 'trueRa']
             return drop_fields(sam_ev, mc_names)
 
@@ -877,25 +891,19 @@ class HealpyInjector(PointSourceInjector):
             # Sample mu_mean directly or get n_inj from a poisson distribution
             # if poisson = True was given
             n_inj = (self.random.poisson(mean_mu)
-                if poisson else int(np.around(mean_mu)))
-            # if no events should be sampled, return nothing
+                     if poisson else int(np.around(mean_mu)))
+
+            # If no events should be sampled, return nothing
             if n_inj < 1:
                 yield n_inj, None
                 continue
 
-            # First we need to select sources to sample from using their weight
-            src_idx = np.random.choice(
-                np.arange(len(self.src)), size=n_inj, p=src["norm_w"])
-
-            # Sample indices from selected src maps and convert to map
-            # coordinates
-            inj_ind = np.zeros(n_inj)
-            for i, src_id in enumerate(src_idx):
-                # Sample one event from the selected source map
-                inj_ind[i], _ = amp_hp.healpy_rejection_sampler(
-                    src["sigma"][src_id], n=1)
+            # Otherwise sample pixel indices from combined soruce map
+            inj_ind, _ = amp_hp.healpy_rejection_sampler(
+                self.src_map, n=n_inj)
 
             # Assign indices to healpy map coordinates
+            NSIDE = hp.get_nside(self.src_map)
             inj_th, inj_phi = hp.pix2ang(NSIDE, inj_ind)
 
             # Get equatorial coordinates for the injected signal
@@ -903,7 +911,7 @@ class HealpyInjector(PointSourceInjector):
 
             # Temporary recarray to hold the sampled mc_arr events
             sam_idx = np.empty((n_inj,), dtype=self.mc_arr.dtype)
-            indices = np.arange(len(self.mc_arr))
+
             # Loop over injected evts, select MC evt from all given samples
             # and fill it into inj.
             for i, (_dec, ra) in enumerate(zip(inj_dec, inj_ra)):
@@ -916,30 +924,26 @@ class HealpyInjector(PointSourceInjector):
                 # Pick a random event from the MC data in the dec band.
                 # Events are weighted using the _norm_w set up in _weight()
                 mask = np.logical_and(
-                    self.mc_arr["dec"]>min_dec, self.mc_arr["dec"]<max_dec)
-                _id = indices[mask]
+                    self.mc_arr["dec"] > min_dec, self.mc_arr["dec"] < max_dec)
+
                 # Choose one event from mc_arr per sampled location
                 sam_idx[i] = np.random.choice(
                     self.mc_arr, size=1, p=self._norm_w)
 
-                # Sampled locations areeasily applied directly
-                sam_idx["ra"][i] = inj_ra[i]
-                sam_idx["dec"][i] = inj_dec[i]
-
-
-            # get the events that were sampled from each sample seperately
+            # When we use multiple samples, store injected events from each
+            # given sample seperately
             enums = np.unique(sam_idx["enum"])
 
-            # Case if only rec array was given in fill()
+            # Case if only one rec array (single sample) was given in fill()
             if len(enums) == 1 and enums[0] < 0:
-                # only one sample, just return recarray
+                # Only one sample, just return recarray
                 sam_ev = np.copy(self.mc[enums[0]][sam_idx["idx"]])
-                # Assign sampled ra/dec to single out array
+                # Assign sampled ra/dec to single output array
                 yield n_inj, assign_and_drop(sam_ev, inj_ra, inj_dec)
                 continue
 
             # For multiple samples return each injected event in a dict
-            # indicating its original sample
+            # indicating from which original sample it came
             sam_ev = dict()
             for enum in enums:
                 mask = (sam_idx["enum"] == enum)
@@ -947,7 +951,6 @@ class HealpyInjector(PointSourceInjector):
                 sam_ev_i = np.copy(self.mc[enum][idx])
                 # Assign sampled ra/dec to each out array
                 sam_ev[enum] = assign_and_drop(
-                    sam_ev_i, sam_idx["ra"][mask], sam_idx["dec"][mask])
+                    sam_ev_i, inj_ra[mask], inj_dec[mask])
 
             yield n_inj, sam_ev
-
