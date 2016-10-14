@@ -1562,6 +1562,21 @@ class PointSourceLLH(object):
                                        + [(par, np.float)
                                           for par in self.params])
 
+        # Keep track which scramble belongs to which alpha (and maybe BG)
+        trialenum = np.zeros(0, dtype=int) - 1
+        def trialenum_(trialenum, trials):
+            """
+            Just add an increasing index to trialenum. The meaning of the
+            sample can be derived from the output of weighted_sensitivity()
+            """
+            if len(trialenum) == 0:
+                trialenum = np.zeros(len(trials), dtype=int)
+            else:
+                trialenum = np.append(trialenum,
+                    np.ones(len(trials) - len(trialenum), dtype=int) +
+                        trialenum[-1])
+            return trialenum
+
         for i, (TSval_i, alpha_i, beta_i) in enumerate(zip(TSval, alpha, beta)):
 
             if TSval_i is None:
@@ -1575,6 +1590,9 @@ class PointSourceLLH(object):
                                        self.do_trials(src_ra, src_dec,
                                                       n_iter=n_bckg,
                                                       **kwargs))
+
+                    # Background scrambles get own enum, should always be 0
+                    trialenum = trialenum_(trialenum, trials)
 
                     stop = time.time()
                     mins, secs = divmod(stop - start, 60)
@@ -1604,6 +1622,9 @@ class PointSourceLLH(object):
             # calculate sensitivity
             mu_i, trials = do_estimation(TSval_i, beta_i, trials)
 
+            # Normal scrambles get own enum per given alpha/beta value
+            trialenum = trialenum_(trialenum, trials)
+
             TS.append(TSval_i)
             mu_flux.append(mu_i)
             flux.append(inj.mu2flux(mu_i))
@@ -1628,8 +1649,9 @@ class PointSourceLLH(object):
         w = np.vstack([utils.poisson_weight(trials["n_inj"], mu_flux_i)
                        for mu_flux_i in mu_flux])
 
+        # Add trialenum to result dict
         result = dict(flux=flux, mu=mu_flux, TSval=TS, alpha=alpha, beta=beta,
-                      fit=fit, trials=trials, weights=w)
+                      fit=fit, trials=trials, trialenum=trialenum, weights=w)
 
         return result
 
