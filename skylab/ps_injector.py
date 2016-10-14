@@ -754,8 +754,8 @@ class HealpyInjector(PointSourceInjector):
         in the same declination band as the sampled event corresponding to
         the events weight.
 
-        Only slightly adapted to not use 'src_dec' and added 'ra', dec' and
-        'idx' information to mc_arr, to use it in sample().
+        Only slightly adapted to not use 'src_dec' and added dec'
+        information to mc_arr, to use it in sample().
 
         If multiple samples are given the dictionary must have the structure
         `{key1:sample1, key2:sample2}` where keys are integers and samples are
