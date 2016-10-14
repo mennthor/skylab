@@ -2172,11 +2172,6 @@ class HealpyLLH(PointSourceLLH):
         kwargs["llh_model"] = llh_model
         kwargs["mode"] = "all"
 
-        # Give the exp an additional ID to select correct cached maps later
-        if "idx" not in exp.dtype.fields:
-            exp = np.copy(numpy.lib.recfunctions.append_fields(
-                exp, "idx", np.arange(len(exp)), dtypes=np.int, usemask=False))
-
         # Make MC class variable and add sinDec field
         if "sinDec" not in mc.dtype.fields:
             self.mc = numpy.lib.recfunctions.append_fields(
@@ -2244,11 +2239,6 @@ class HealpyLLH(PointSourceLLH):
 
         # number of total events
         self._N = len(self.exp)
-
-        # Set event indices for exp events
-        self._ev_ind = np.arange(self._N)
-        if not np.all(self._ev_ind == self.exp["idx"]):
-            raise ValueError("exp['idx'] are not valid IDs.")
 
         # Double check if mode is 'all'
         if self.mode == "all":
@@ -2419,9 +2409,6 @@ class HealpyLLH(PointSourceLLH):
             Scramble events prior to selection. (default: False)
         inject : numpy_structured_array
             Events to add to the selected events, fields equal to exp. data.
-            Field `idx` are original mc indices for injected events.
-            Is used to assign cached maps to injected events.
-            (default: None)
 
         Returns
         -------
