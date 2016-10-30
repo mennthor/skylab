@@ -2191,6 +2191,7 @@ class HealpyLLH(PointSourceLLH):
         kwargs["mode"] = "all"
 
         # Make MC class variable and add sinDec field
+        self.mc = mc
         if "sinDec" not in mc.dtype.fields:
             self.mc = numpy.lib.recfunctions.append_fields(
                 mc, "sinDec", np.sin(mc["dec"]),
