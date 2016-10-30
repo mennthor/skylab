@@ -2187,6 +2187,10 @@ class HealpyLLH(PointSourceLLH):
         if not isinstance(llh_model, ps_model.HealpyLLH):
             raise TypeError("LLH model must be instance of ps_model.HealpyLLH")
 
+        # Give the HealpyLLH model the same ncpu number for parallelizing the
+        # signal computation
+        llh_model._ncpu = self._ncpu
+
         kwargs["llh_model"] = llh_model
         kwargs["mode"] = "all"
 
@@ -2331,6 +2335,23 @@ class HealpyLLH(PointSourceLLH):
         if val != "all":
             raise ValueError("mode must be 'all' for HealpyLLH.")
         self._mode = val
+        return
+
+    # Set the _ncpu to the llh_model as well. Overwrite superclass setter
+    @property
+    def ncpu(self):
+        return self._ncpu
+
+    @ncpu.setter
+    def ncpu(self, val):
+        if int(val) > multiprocessing.cpu_count():
+            logger.warn("Assigning more workers than available number of cpu")
+        elif int(val) < 1:
+            raise ValueError("Need at least one cpu to work with")
+
+        self._ncpu = int(val)
+        self.llh_model._ncpu = self.ncpu
+
         return
 
     # If someone wants to view the combined spatial source map return it here
