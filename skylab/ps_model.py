@@ -35,6 +35,7 @@ from .utils import kernel_func
 
 ############################################################################
 # HealpyLLH extra imports
+import multiprocessing
 # - My analysis tools
 import anapymods.healpy as amp_hp
 ############################################################################
@@ -884,6 +885,36 @@ class EnergyLLHfixed(EnergyLLH):
 ############################################################################
 # HealpyLLH
 ############################################################################
+def _multi_proc_sig(args):
+        """
+        Multiprocessing wrapper around the single pixel convolution step in
+        the signal calculation, to execute the signal calculation in parallel.
+
+         Parameters
+         ----------
+         args : tupel
+            Wrapper tupel args=(th, phi, sigma) for the arguments of
+            amp_hp.single_pixel_gaussian_convolution():
+            self : class instance
+                Used to acces calss attributes. Multiprocessings cann only
+                handle functions outside any instance because it uses
+                serialization.
+            th : float
+                Current events healpy coordinate theta.
+            phi : float
+                Current events healpy coordinate phi.
+            smooth_sigma : float
+                Current events angular error sigma used for the smoothing
+                kernel sigma.
+        """
+        self_, th, phi, smooth_sigma = args
+        result = amp_hp.single_pixel_gaussian_convolution(
+            m=self_._spatial_pdf_map, th=th, phi=phi,
+            sigma=smooth_sigma, clip=self_._clip
+        )
+        return result
+
+
 class HealpyLLH(ClassicLLH):
     r"""
     Extending the ClassicLLH model to be able to use stacking and handle
@@ -907,6 +938,8 @@ class HealpyLLH(ClassicLLH):
     """
     # Clip kernel at clip*sigma
     _clip = 3.
+    # Get this value for multiprocessing from the HealpyLLH class
+    _ncpu = 1
 
     def _make_spatial_pdf_map(self, src):
         r"""
@@ -976,19 +1009,23 @@ class HealpyLLH(ClassicLLH):
         # Because the src maps were added with the weight beforehand, this
         # already is the stacked signal llh value for each event.
         S = []
-        for th_i, phi_i, smooth_sigma_i in zip(th, phi, smooth_sigma):
-            S.append(
-                amp_hp.single_pixel_gaussian_convolution(
-                    m=self._spatial_pdf_map, th=th_i, phi=phi_i,
-                    sigma=smooth_sigma_i, clip=self._clip
-                )
-            )
-        # S = [
-        #     amp_hp.single_pixel_gaussian_convolution(
-        #         m=self._spatial_pdf_map, th=th_i, phi=phi_i,
-        #         sigma=smooth_sigma_i, clip=self._clip
-        #     )
-        #     for th_i, phi_i, smooth_sigma_i in zip(th, phi, smooth_sigma)
-        # ]
+
+        # This can be heavily parallelized
+        if self._ncpu > 1:
+            pool = multiprocessing.Pool(self._ncpu)
+            # Wrap up arguments for each process
+            args = [(self, th_i, phi_i, sig_i) for th_i, phi_i, sig_i in zip(
+                th, phi, smooth_sigma)]
+
+            S = pool.map(_multi_proc_sig, args)
+
+            pool.close()
+            pool.join()
+        # If only one CPU: Do it one after another
+        else:
+            S = [amp_hp.single_pixel_gaussian_convolution(
+                m=self._spatial_pdf_map, th=th_i, phi=phi_i,
+                sigma=sig_i, clip=self._clip)
+                for th_i, phi_i, sig_i in zip(th, phi, smooth_sigma)]
 
         return np.array(S)
