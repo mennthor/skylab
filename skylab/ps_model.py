@@ -885,33 +885,33 @@ class EnergyLLHfixed(EnergyLLH):
 # HealpyLLH
 ############################################################################
 def _multi_proc_sig(args):
-        """
-        Multiprocessing wrapper around the single pixel convolution step in
-        the signal calculation, to execute the signal calculation in parallel.
+    """
+    Multiprocessing wrapper around the single pixel convolution step in
+    the signal calculation, to execute the signal calculation in parallel.
 
-         Parameters
-         ----------
-         args : tupel
-            Wrapper tupel args=(th, phi, sigma) for the arguments of
-            amp_hp.single_pixel_gaussian_convolution():
-            self : class instance
-                Used to acces calss attributes. Multiprocessings cann only
-                handle functions outside any instance because it uses
-                serialization.
-            th : float
-                Current events healpy coordinate theta.
-            phi : float
-                Current events healpy coordinate phi.
-            smooth_sigma : float
-                Current events angular error sigma used for the smoothing
-                kernel sigma.
-        """
-        self_, th, phi, smooth_sigma = args
-        result = amp_hp.single_pixel_gaussian_convolution(
-            m=self_._spatial_pdf_map, th=th, phi=phi,
-            sigma=smooth_sigma, clip=self_._clip
-        )
-        return result
+     Parameters
+     ----------
+     args : tupel
+        Wrapper tupel args=(th, phi, sigma) for the arguments of
+        amp_hp.single_pixel_gaussian_convolution():
+        self : class instance
+            Used to acces calss attributes. Multiprocessings cann only
+            handle functions outside any instance because it uses
+            serialization.
+        th : float
+            Current events healpy coordinate theta.
+        phi : float
+            Current events healpy coordinate phi.
+        smooth_sigma : float
+            Current events angular error sigma used for the smoothing
+            kernel sigma.
+    """
+    self_, th, phi, smooth_sigma = args
+    result = amp_hp.single_pixel_gaussian_convolution(
+        m=self_._spatial_pdf_map, th=th, phi=phi,
+        sigma=smooth_sigma, clip=self_._clip
+    )
+    return result
 
 
 class HealpyLLH(ClassicLLH):
