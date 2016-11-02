@@ -997,6 +997,33 @@ class HealpyLLH(ClassicLLH):
         S : array-like
             Spatial signal probability for each event in ev.
         """
+        def angdist(fix_ra, fix_dec, ra, sinDec):
+            """
+            Calculate angular distance between a direction (fix_ra, fix_dec)
+            and multiple other positions (ra, dec).
+            Hopefully the fastest way to do this...
+
+            Parameters
+            ----------
+            fix_ra, fix_dec : float
+                Fixed position in RA, DEC (radians) to which all distances
+                are calculated against.
+            ra, sinDec : array
+                Multiple positions in RA, DEC (radians) for which the
+                distances to (fix_ra, fix_dec) is calculated.
+
+            Returns
+            -------
+            dist : array
+                Distances in radian.
+            """
+            cosDist = (np.cos(fix_ra - ra) * np.cos(fix_dec) *
+                       np.sqrt(1. - sinDec**2) + np.sin(fix_dec) * sinDec)
+            # handle possible floating precision errors
+            cosDist[cosDist > 1] = 1.
+            dist = np.arccos(cosDist)
+            return dist
+
         # Shift RA, DEC to healpy coordinates to use it in
         # single_pixel_gaussian_convolution().
         th, phi = amp_hp.DecRaToThetaPhi(ev["dec"], ev["ra"])
