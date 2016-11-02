@@ -35,7 +35,7 @@ from .utils import kernel_func
 
 ############################################################################
 # HealpyLLH extra imports
-import multiprocessing
+import healpy as hp
 # - My analysis tools
 import anapymods.healpy as amp_hp
 ############################################################################
@@ -963,6 +963,7 @@ class HealpyLLH(ClassicLLH):
         """
         added_map = self._add_weighted_maps(src["sigma"], src["normw"])
         self._spatial_pdf_map = amp_hp.norm_healpy_map(added_map)
+        self._nside = hp.get_nside(added_map)
         return self._spatial_pdf_map
 
     def _add_weighted_maps(self, m, w):
@@ -998,61 +999,148 @@ class HealpyLLH(ClassicLLH):
         S : array-like
             Spatial signal probability for each event in ev.
         """
-        def angdist(fix_ra, fix_dec, ra, sinDec):
+        def angdist(fix_phi, fix_th, phi, sinTh):
             """
-            Calculate angular distance between a direction (fix_ra, fix_dec)
-            and multiple other positions (ra, dec).
+            Calculate angular distance between a healpy direction
+            (fix_phi, fix_th) and multiple other positions (phi, dec).
             Hopefully the fastest way to do this...
 
             Parameters
             ----------
-            fix_ra, fix_dec : float
-                Fixed position in RA, DEC (radians) to which all distances
+            fix_phi, fix_th : float
+                Fixed position in phi, theta (radians) to which all distances
                 are calculated against.
-            ra, sinDec : array
-                Multiple positions in RA, DEC (radians) for which the
-                distances to (fix_ra, fix_dec) is calculated.
+            phi, sinTh : array
+                Multiple positions in phi, theta (radians) for which the
+                distances to (fix_phi, fix_th) is calculated.
 
             Returns
             -------
             dist : array
                 Distances in radian.
             """
-            cosDist = (np.cos(fix_ra - ra) * np.cos(fix_dec) *
-                       np.sqrt(1. - sinDec**2) + np.sin(fix_dec) * sinDec)
+            # Note: This differs from the PS signal distance, because the
+            #       normal spherical coords (not equatorial) are used.
+            cosDist = (np.cos(fix_phi - phi) * np.sin(fix_th) * sinTh +
+                       np.cos(fix_th) * np.sqrt(1. - sinTh**2))
             # handle possible floating precision errors
             cosDist[cosDist > 1] = 1.
             dist = np.arccos(cosDist)
             return dist
 
+        def gaussian_on_a_sphere(mean_th, mean_phi, sigma):
+            """
+            This function returns a 2D normal pdf on a discretized healpy grid.
+            To chose the function values correctly in spherical coordinates,
+            the true angular distances to the mean are used.
+
+            Pixels farther away from the mean than clip * sigma are clipped
+            because the normal distribution falls quickly to zero. The error
+            made by this can be easily estimated and a discussion can be found
+            in [arXiv:1005.1929](https://arxiv.org/abs/1005.1929v2).
+
+            Parameters
+            ----------
+            mean_th : float
+                Position of the mean in healpy coordinate `theta`. `theta` is in
+                [0, pi] going from north to south pole.
+            mean_phi : float
+                Position of the mean in healpy coordinate `phi`. `phi` is in [0, 2pi]
+                and is equivalent to the azimuth angle.
+            sigma : float
+                Standard deviation of the 2D normal distribution. Only symmetric
+                normal pdfs are used here.
+
+            Returns
+            -------
+            kernel : array
+                Values of the 2D normal distribution at the selected pixels. If clip
+                False, kernel is a valid healpy map with resolution NSIDE.
+            keep_idx : array
+                Pixel indices that are kept from the full healpy map after clipping.
+                If clip is False this is a sorted integer array with values
+                [0, 1, ..., NPIX-1] with NPIX tha number of pixels in the full healpy
+                map with resolution NSIDE.
+            """
+            # Clip unneccessary pixels, just keep clip*sigma (radians)
+            # around the mean. Using inlusive=True to make sure at least
+            # one pixel gets returned.
+            # Always returns a list, so no manual np.array() required.
+            keep_idx = hp.query_disc(
+                self._nside, hp.ang2vec(mean_th, mean_phi),
+                self._clip * sigma, inclusive=True)
+
+            # Create only the needed the pixel healpy coordinates
+            th, phi = hp.pix2ang(self._nside, keep_idx)
+            sinTh = np.sin(th)
+
+            # For each pixel get the distance to (mean_th, mean_phi) direction
+            dist = angdist(mean_phi, mean_th, phi, sinTh)
+
+            # Get the 2D gaussian values at those distances -> kernel function
+            # Because the kernel is radial symmetric we use a simplified
+            # version -> 1D gaussian, properly normed
+            sigma2 = 2 * sigma**2
+            kernel = np.exp(-dist**2 / sigma2) / (np.pi * sigma2)
+
+            return kernel, keep_idx
+
+        def single_pixel_gaussian_convolution(th, phi, sigma):
+            """
+            Calculates the convolution of the pixel on the healpy map `m`
+            with a 2D gaussian kernel centered at healpy coordinates theta,
+            phi with standard deviation sigma.
+
+            For performance reasons the kernel is clipped.
+            The convolution is a simple linear combination of map :math:`M`
+            and kernel :math:`K` values:
+
+            ..math:
+
+              (\mathrm{Pix}_\mathrm{conv})_i = \sum_j K_j(\theta, \phi)\cdot M_j
+
+            Parameters
+            ----------
+            m : array
+                Valid healpy map.
+            th : float
+                Position of the mean in healpy coordinate `theta`. `theta` is
+                in [0, pi] going from north to south pole.
+            phi : float
+                Position of the mean in healpy coordinate `phi`. `phi` is in
+                [0, 2pi] and is equivalent to the azimuth angle.
+            sigma : float
+                Standard deviation of the 2D normal distribution. Only symmetric
+                normal pdfs are used here. Passed to `gaussian_on_a_sphere()`.
+
+            Returns
+            -------
+            conv_pix : float
+                Value of the single pixel of the convolved map at the given position.
+            """
+            # Get the clipped kernel map
+            kernel, keep_idx = gaussian_on_a_sphere(
+                mean_th=th, mean_phi=phi, sigma=sigma)
+
+            # Normalize kernel after cutoff to ensure normalized pdfs
+            kernel = kernel / np.sum(kernel)
+
+            # Now convolve the kernel and the given map for the pixel at pixind only.
+            # This is just a linear combination of weighted pixel values selected by
+            # the kernel map.
+            conv_pix = np.sum(self._spatial_pdf_map[keep_idx] * kernel)
+
+            return conv_pix
+
         # Shift RA, DEC to healpy coordinates to use it in
         # single_pixel_gaussian_convolution().
         th, phi = amp_hp.DecRaToThetaPhi(ev["dec"], ev["ra"])
 
-        # Get smoothing sigma from every event
-        smooth_sigma = ev["sigma"]
-
         # For every event get the single convolved pixel at its location.
         # Because the src maps were added with the weight beforehand, this
         # already is the stacked signal llh value for each event.
-        S = []
-
-        # This can be heavily parallelized
-        if self._ncpu > 1:
-            pool = multiprocessing.Pool(self._ncpu)
-            # Wrap up arguments for each process
-            args = [(self, th_i, phi_i, sig_i) for th_i, phi_i, sig_i in zip(
-                th, phi, smooth_sigma)]
-
-            S = pool.map(_multi_proc_sig, args)
-
-            pool.close()
-            pool.join()
-        # If only one CPU: Do it one after another
-        else:
-            S = [amp_hp.single_pixel_gaussian_convolution(
-                m=self._spatial_pdf_map, th=th_i, phi=phi_i,
-                sigma=sig_i, clip=self._clip)
-                for th_i, phi_i, sig_i in zip(th, phi, smooth_sigma)]
+        S = [single_pixel_gaussian_convolution(
+            th=th_i, phi=phi_i, sigma=sig_i)
+            for th_i, phi_i, sig_i in zip(th, phi, ev["sigma"])]
 
         return np.array(S)
