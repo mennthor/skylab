@@ -1398,7 +1398,7 @@ class PointSourceLLH(object):
             Precision for breaking point.
 
         """
-
+        
         def do_estimation(TSval, beta, trials):
             r"""Perform sensitivity estimation by varying the injected source
             strength until the scrambling yields a test statistic with the
@@ -1534,7 +1534,7 @@ class PointSourceLLH(object):
             # save all trials
 
             return mu_eff, trials
-
+        
         start = time.time()
 
         # configuration
@@ -1542,6 +1542,8 @@ class PointSourceLLH(object):
         n_iter = int(kwargs.pop("n_iter", _n_iter))
         eps = kwargs.pop("eps", _eps)
         fit = kwargs.pop("fit", None)
+        w_theo = kwargs.pop('w_theo', np.ones_like(np.atleast_1d(src_dec)))
+        
 
         if fit is not None and not hasattr(fit, "isf"):
             raise AttributeError("fit must have attribute 'isf(alpha)'!")
@@ -1555,10 +1557,10 @@ class PointSourceLLH(object):
                              " same length!")
 
         # setup source injector
-        inj.fill(src_dec, mc, self.livetime)
+        inj.fill(src_dec, mc, self.livetime, w_theo=w_theo)
 
-        print("Estimate Sensitivity for declination {0:5.1f} deg".format(
-                np.degrees(src_dec)))
+        print("Estimate Sensitivity for {0:5d} sources from declination {1:5.1f}deg to {2:5.1f}deg".format(
+                len(np.atleast_1d(src_dec)),min(np.degrees(src_dec)),max(np.degrees(src_dec))))
 
         # result list
         TS = list()
