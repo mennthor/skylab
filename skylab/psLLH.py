@@ -176,6 +176,9 @@ class PointSourceLLH(object):
     _nsource_bounds = _nsource_bounds
     _nsource_rho = _nsource_rho
 
+    #src weighting for stacking
+    _w_theo = None
+
     # multiprocessing
     _ncpu = 1
 
@@ -703,6 +706,17 @@ class PointSourceLLH(object):
 
         return
 
+    @property
+    def w_theo(self):
+        return self._w_theo
+
+    @w_theo.setter
+    def w_theo(self, value):
+        self._w_theo = value
+
+        return
+
+
     # PUBLIC methods
 
     def all_sky_scan(self, **kwargs):
@@ -1164,6 +1178,7 @@ class PointSourceLLH(object):
         scramble = kwargs.pop("scramble", False)
         inject = kwargs.pop("inject", None)
         kwargs.setdefault("pgtol", _pgtol)
+
 
         # Set all weights once for this src location, if not already cached
         self._select_events(src_ra, src_dec, inject=inject, scramble=scramble)
@@ -1794,7 +1809,7 @@ class MultiPointSourceLLH(PointSourceLLH):
         # init empty dictionary containers
         self._enum = dict()
         self._sams = dict()
-
+        
         return
 
     def __str__(self):
@@ -1867,7 +1882,7 @@ class MultiPointSourceLLH(PointSourceLLH):
         self._src_dec = src_dec
 
         inject = kwargs.pop("inject", None)
-
+        
         # inject events according to their parent sample
         for enum, sam in self._sams.iteritems():
 
@@ -1877,6 +1892,10 @@ class MultiPointSourceLLH(PointSourceLLH):
                 inj_i = inject
 
             sam._select_events(src_ra, src_dec, inject=inj_i, **kwargs)
+
+                            
+
+
 
         self._n = sum([sam._n for sam in self._sams.itervalues()])
         self._N = sum([sam._N for sam in self._sams.itervalues()])
@@ -2099,6 +2118,499 @@ class MultiPointSourceLLH(PointSourceLLH):
             obj.reset()
 
         return
+
+
+
+
+
+
+
+
+
+
+class StackingPointSourceLLH(PointSourceLLH):
+    r"""Class to handle a stacking point source analysis.
+        Mainly differs in the select_event and llh function
+
+        Spatial signal llh: S ---> Sum S_i for i index of the 
+        stacked sources
+
+    """
+
+    def __init__(self, *args, **kwargs):
+
+        #Same initialisation as in single point source llh class
+        super(StackingPointSourceLLH, self).__init__(*args, **kwargs)
+        return
+
+
+    # INTERNAL METHODS
+
+    def _select_events(self, src_ra, src_dec, **kwargs):
+        r"""Select events around source locations used in llh calculation.
+
+        Parameters
+        ----------
+        src_ra src_dec : float, array_like
+            Rightascension and Declination of source(s)
+
+        Other parameters
+        ----------------
+        scramble : bool
+            Scramble rightascension prior to selection.
+        inject : numpy_structured_array
+            Events to add to the selected events, fields equal to exp. data.
+
+        """
+
+        scramble = kwargs.pop("scramble", False)
+        inject = kwargs.pop("inject", None)
+        if kwargs:
+            raise ValueError("Don't know arguments", kwargs.keys())
+
+        # reset
+        self.reset()
+
+        # convert src_ra, src_dec to numpy arrays if not already done
+        src_ra = np.atleast_1d(src_ra)
+        src_dec = np.atleast_1d(src_dec)
+
+        # get the zenith band with correct boundaries for each source
+        dec = src_dec 
+        min_dec = np.maximum(-np.pi / 2., dec - self.delta_ang) 
+        max_dec = np.minimum(np.pi / 2., dec + self.delta_ang)
+        
+        dPhi = 2. * np.pi
+
+        # number of total events
+        self._N = len(self.exp)
+        # number of point sources
+        N_src = len(src_ra)
+
+
+        if self.mode == "all" :
+            # all events are selected
+            exp_mask = np.ones_like(self.exp["sinDec"], dtype=np.bool)
+
+        elif self.mode in ["band", "box"]:
+            # get events that are within at least one declination band
+            exp_mask = ((self.exp["sinDec"] > np.sin(min_dec)[:, np.newaxis])
+                            &(self.exp["sinDec"] < np.sin(max_dec)[:, np.newaxis])).any(axis=0)
+
+        else:
+            raise ValueError("Not supported mode: {0:s}".format(self.mode))
+
+        # update the zenith selection and background probability
+        self._ev = self.exp[exp_mask]
+
+        # update rightascension information for scrambled events
+        if scramble and not self.fix:
+            self._ev["ra"] = self.random.uniform(0., 2. * np.pi,
+                                                 size=len(self._ev))
+
+
+        # inject events
+        if inject is not None:
+            self._ev = np.append(self._ev,
+                                 numpy.lib.recfunctions.append_fields(
+                                    inject, "B",
+                                    self.llh_model.background(inject),
+                                    usemask=False))
+
+            self._N += len(inject)
+
+
+
+
+        # selection in rightascension
+        if self.mode == "box":
+            # the solid angle dOmega = dRA * dSinDec = dRA * dDec * cos(dec)
+            # is a function of declination, i.e., for a constant dOmega,
+            # the rightascension value has to change with declination
+            cosFact = np.amin(np.cos([min_dec, max_dec]),axis=0)
+            dPhi = np.amin([np.repeat(2. * np.pi,N_src), 2. * self.delta_ang / cosFact],axis=0)
+            ra_dist = np.fabs(np.fmod(self._ev["ra"] - src_ra[:,np.newaxis] + np.pi, 2. * np.pi)
+                              - np.pi)
+
+            mask_ra = ra_dist < dPhi[:,np.newaxis]/2.
+            mask_dec = (self._ev["sinDec"] > np.sin(min_dec)[:, np.newaxis]) \
+                        &(self._ev["sinDec"] < np.sin(max_dec)[:, np.newaxis])
+
+            tot_mask = mask_ra&mask_dec
+            mask = np.any(tot_mask, axis=0)
+            tot_mask = tot_mask.T[mask].T
+
+
+            self._ev = self._ev[mask]
+            index = np.arange(len(self._ev))
+
+            #save the index of the events in the box around each source
+            ind = dict()
+            for i,m_i in enumerate(tot_mask):
+                ind[i] = index[m_i]
+
+
+        self._src_ra = src_ra
+        self._src_dec = src_dec
+
+
+        # calculate signal term
+        if self.mode != 'box':
+            self._ev_S = self.llh_model.signal(src_ra, src_dec, self._ev)
+        else:
+            # Only calculate signal llh of events within box around the respective source,
+            # else set the value to 0
+            self._ev_S = np.zeros((len(src_dec),len(self._ev)))
+            for i, dec_i in enumerate(src_dec):
+                self._ev_S[i][ind[i]] = self.llh_model.signal(src_ra[i],dec_i,self._ev[ind[i]])
+
+
+        # do not calculate values with signal below threshold for every source
+        ev_mask = np.any(self._ev_S > self.thresh_S,axis=0)
+        self._ev = self._ev[ev_mask]
+        self._ev_S = (self._ev_S.T[ev_mask]).T
+
+        # set number of selected events
+        self._n = len(self._ev)
+
+        if (self._n < 1
+            and (np.sin(self._src_dec) < self.sinDec_range[0]
+                 and np.sin(self._src_dec) > self.sinDec_range[-1])):
+            logger.error("No event was selected, fit will go to -infinity")
+
+        return
+
+
+
+    def llh(self, **fit_pars):
+        r"""Calculate the likelihood ratio for the selected events.
+
+        Evaluate pointsource likelihood using cached values. For new input,
+        values are re-evaluated and cached.
+
+        .. math:: \log\Lambda=\sum_i\log\left(
+                  \frac{n_s}{N}\left(\frac{\mathcal{S}}{\mathcal{B}}w-1\right)
+                                     +1\right)
+
+        Parameters
+        ----------
+        fit_pars : dict
+            Dictionary with all fit parameters, nsources and all defined by
+            `llh_model`.
+
+        Returns
+        -------
+        funval : float
+            Function value
+        grad : array_like
+            Gradient at the point.
+        """
+
+        nsources = fit_pars.pop("nsources")
+        # Optional theoretical weight from the catalog
+        if self._w_theo is None:
+            self._w_theo = np.ones_like(self._src_dec,dtype=float)
+
+        assert(len(self._src_dec) == len(self._w_theo))
+
+
+        N = self._N
+        n = self._n
+
+        assert(n == len(self._ev))
+
+        if len(self._src_dec) == 1:
+            logger.error('Only one source hypothesis used, switch to PointSourceLLH class!')
+
+
+        #Load relative source weights
+        src_w, src_w_grad = self.llh_model.effA(dec = self._src_dec, **fit_pars)
+
+        #---->total source weight
+        norm = np.inner(src_w, self._w_theo)
+        w_tot = (src_w * self._w_theo) / norm
+        w_tot_grad = (src_w_grad['gamma'] * self._w_theo) / norm
+
+        SoB = np.tensordot(self._ev_S, w_tot, axes=(0,0))
+        SoB /= self._ev["B"]
+
+
+        #Energy, ... dependent weight ratio
+        w, grad_w = self.llh_model.weight(self._ev, **fit_pars)
+
+        x = (SoB * w - 1.) / N
+
+        # check which sums of the likelihood are close to the divergence
+        aval = -1. + _aval
+        alpha = nsources * x
+
+        # select events close to divergence
+        xmask = alpha > aval
+
+        # function value, log1p for OK, otherwise quadratic taylor
+        funval = np.empty_like(alpha, dtype=np.float)
+        funval[xmask] = np.log1p(alpha[xmask])
+        funval[~xmask] = (np.log1p(aval)
+                      + 1. / (1.+aval) * (alpha[~xmask] - aval)
+                      - 1./2./(1.+aval)**2 * (alpha[~xmask]-aval)**2)
+        funval = funval.sum()
+        if N > n:
+            funval += (N - n) * np.log1p(-nsources / N)
+
+        # gradients
+
+        # in likelihood function
+        ns_grad = np.empty_like(alpha, dtype=np.float)
+        ns_grad[xmask] = x[xmask] / (1. + alpha[xmask])
+        ns_grad[~xmask] = (x[~xmask] / (1. + aval)
+                       - x[~xmask] * (alpha[~xmask] - aval) / (1. + aval)**2)
+        ns_grad = ns_grad.sum()
+        if N > n:
+            ns_grad -= (N - n) / (N - nsources)
+
+        # in weights 
+        grad_S = np.tensordot(self._ev_S, w_tot_grad, axes=(0,0))/ self._ev['B'] - SoB * np.sum(w_tot_grad)
+
+        if grad_w is not None:
+            par_grad = 1./N * (w * grad_S + SoB * grad_w)
+            par_grad[:, xmask] *= nsources / (1. + alpha[xmask])
+            par_grad[:, ~xmask] *= (nsources / (1. + aval)
+                                    - nsources * (alpha[~xmask] - aval)
+                                        / (1. + aval)**2)
+
+            par_grad = par_grad.sum(axis=-1)
+
+        else:
+            par_grad = 1./N * (w * grad_S)
+            par_grad[:, xmask] *= nsources / (1. + alpha[xmask])
+            par_grad[:, ~xmask] *= (nsources / (1. + aval)
+                                    + nsources * (alpha[~xmask] - aval)
+                                        / (1. + aval)**2)
+
+            par_grad = par_grad.sum(axis=-1)
+
+
+        grad = np.append(ns_grad, par_grad)
+
+        # multiply by two for chi2 distributed test-statistic
+        LogLambda = 2. * funval
+        grad = 2. * grad
+
+        return LogLambda, grad
+
+
+
+
+
+
+class StackingMultiPointSourceLLH(MultiPointSourceLLH):
+    r"""Class to handle multiple event samples that are distinct of each other.
+
+    Different samples have different effective areas that have to be taken into
+    account for parting the number of expected neutrinos in between the
+    diffenrent samples.
+
+    Each sample is added as an object of PointSourceLLH
+
+    """
+
+    def __init__(self, *args, **kwargs):
+
+        self._src_spline = None
+
+        #Same initialisation as in single point source multi year llh class
+        super(StackingMultiPointSourceLLH, self).__init__(*args, **kwargs)
+
+
+        return
+
+
+
+    def add_sample(self, name, obj):
+        r"""Add a StackingPointSourceLLH object to the sample.
+
+        Parameters
+        -----------
+
+        obj : PointSourceLLH
+            PointSourceLLH instance to be used in the multifit
+
+        """
+
+        if not isinstance(obj, StackingPointSourceLLH):
+            raise ValueError("'{0}' is not Stacking LLH-style".format(obj))
+
+        if name in self._enum.values():
+            enum = self._enum.keys()[self._enum.values().index(name)]
+            print("Overwrite Sample {0:2d} - {1:s}".format(enum, name))
+        else:
+            enum = max(self._enum) + 1 if self._enum else 0
+
+        self._enum[enum] = name
+        self._sams[enum] = obj
+
+        return
+
+
+    def llh(self, **fit_pars):
+        r"""LLH for multi-sample is the sum of all Likelihood functions.
+
+        The number of fitted source neutrinos is distributed between
+        the samples according to their effective area at the multiple 
+        source declinations:
+
+            P(j | gamma) = Sum_dec (P(j | gamma,dec) * P(dec | gamma)) 
+
+        Parameters
+        -----------
+        fit_pars : dict
+            Parameters used for the fit
+
+        Returns
+        --------
+        logLambda : float
+            Log Likelihood value at the point *fit_pars*.
+
+        logLambda_grad : array-like
+            Gradient at the point *fit_pars*.
+
+        """
+
+        src_dec = self._src_dec
+        nsources = fit_pars.pop("nsources")
+
+        w, grad_w = self.source_weights(src_dec, **fit_pars)
+
+
+        logLambda = 0.
+        logLambda_grad = np.zeros_like(self.params, dtype=np.float)
+
+        for k, (enum, sam) in enumerate(self._sams.iteritems()):
+
+            w_j = w[k]
+            dw_j = grad_w[k]
+
+            llh, grad_llh = sam.llh(nsources=nsources * w_j, **fit_pars)
+
+            # llh value
+            logLambda += llh
+
+            # llh gradient
+
+            # nsources
+            logLambda_grad[0] += grad_llh[0] * w_j
+
+            # other parameters
+            for i, par in enumerate(self.params[1:]):
+
+                logLambda_grad[i + 1] += grad_llh[0] * nsources * dw_j[i]
+
+                # check if this parameter is part of this samples minimizer
+                if not par in sam.params:
+                    continue
+
+                # get index of parameter
+                idx = sam.params.index(par)
+
+                logLambda_grad[i + 1] += grad_llh[idx]
+
+        return logLambda, logLambda_grad
+
+
+    
+
+    def source_weights(self, src_dec, **fit_pars):
+
+        r""" Get the effective weight for each data set
+        depending on gamma and the dec of the stacked sources:
+
+        P(j | gamma) = Sum_dec (P(j | gamma,dec_i) * P(dec_i | gamma))
+            * alpha := P(dec_| gamma): relative detection efficiency of dec_i (size=length(sources))
+            * beta  := P(j | gamma, dec_i): relative detection efficiency of sample j
+                                        at dec_i (size=length(years) x length(sources))
+
+        Parameters
+        -----------
+        src_dec : float
+            Declination of point source location.
+
+        fit_pars : dict
+            Fit parameters, important value is gamma, set to *_gamma_def* if
+            not present.
+
+        """
+
+        # Optional theoretical weight from the catalog
+        if self._w_theo is None:
+            self._w_theo = np.ones_like(self._src_dec,dtype=float)
+
+        assert(len(src_dec) == len(self._w_theo))
+
+        w_theo = self._w_theo
+        w_b = np.empty((len(self._enum), len(src_dec)), dtype=np.float)
+        dw_b = np.zeros((len(self._enum), len(src_dec), len(self.params) - 1),
+                                                  dtype=np.float)
+
+
+        for i, (enum, sam) in enumerate(self._sams.iteritems()):
+            w_b[i], dw_i = sam.llh_model.effA(src_dec, **fit_pars)
+
+            # only save derivative with respect to gamma, ...
+            if dw_i is None:
+                continue
+
+            for j, par in enumerate(self.params[1:]):
+                if par not in dw_i:
+                    continue
+
+
+                dw_b[i,:,j] = dw_i[par]
+
+        w_a = w_b.sum(axis=0) * w_theo
+        dw_a = dw_b.sum(axis=0) * w_theo[:,np.newaxis]
+
+        #Normalize the weights w_a and w_b to one
+        norm_a = w_a.sum()
+        w_a /= norm_a
+        dw_a /= norm_a
+
+        # normalize weight at each source declination
+        norm_b = w_b.sum(axis=0)
+        w_b /= norm_b
+        dw_b /= norm_b[:,np.newaxis]
+
+        # normalized sum is bound to one, gradients need to account for
+        # this boundary by cross-talk
+        dw_a -= w_a[:,np.newaxis] * np.sum(dw_a, axis=0)[np.newaxis]
+        dw_b -= w_b[:,:,np.newaxis] * np.sum(dw_b, axis=0)[np.newaxis]
+
+
+        #Create Total weight for each sample j:
+        w = np.dot(w_b, w_a) # array shape: (len(samples))
+
+        # normalize weights to one
+        grad_w = np.tensordot(dw_b,w_a,axes=([1],[0])) + np.dot(w_b,dw_a) # array shape: (len(samples),len(par[1:]))
+
+        grad_w /= w.sum()
+        w /= w.sum()
+
+        # normalized sum is bound to one, gradients need to account for
+        # this boundary by cross-talk
+        grad_w -= w[:,np.newaxis] * np.sum(grad_w, axis=0)[np.newaxis]
+
+        return w, grad_w
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 def fs(args):
