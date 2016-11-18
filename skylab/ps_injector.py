@@ -692,7 +692,7 @@ class StackingPointSourceInjector(PointSourceInjector):
 
 
 
-            print("Sample {0:s}: Selected {1:6d} events for {1:6d} sources.".format(
+            print("Sample {0:s}: Selected {1:6d} events for {2:6d} sources.".format(
                                         str(key), n, len(self.src_dec)))
 
         

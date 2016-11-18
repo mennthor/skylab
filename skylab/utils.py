@@ -161,7 +161,8 @@ class delta_chi2(object):
 
             return
 
-        self.par = chi2.fit(data[data > 0], **kwargs)
+        df = kwargs.pop('df')
+        self.par = chi2.fit(data[data > 0], df, **kwargs)
 
         self.f = chi2(*self.par)
 
