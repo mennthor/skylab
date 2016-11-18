@@ -318,7 +318,7 @@ class ClassicLLH(NullModel):
 
         """
         return
-
+    
     def signal(self, src_ra, src_dec, ev):
         r"""Spatial distance between source position and events
 
@@ -337,10 +337,16 @@ class ClassicLLH(NullModel):
             Spatial signal probability for each event
 
         """
+
+        #convert src_ra, dec to numpy arrays if not already done
+        src_ra = np.atleast_1d(src_ra)[:,np.newaxis]
+        src_dec = np.atleast_1d(src_dec)[:,np.newaxis]
+
         cos_ev = np.sqrt(1. - ev["sinDec"]**2)
         cosDist = (np.cos(src_ra - ev["ra"])
-                            * np.cos(src_dec) * cos_ev
-                          + np.sin(src_dec) * ev["sinDec"])
+                * np.cos(src_dec) * cos_ev
+                + np.sin(src_dec) * ev["sinDec"])
+
 
         # handle possible floating precision errors
         cosDist[np.isclose(cosDist, 1.) & (cosDist > 1)] = 1.
@@ -349,6 +355,7 @@ class ClassicLLH(NullModel):
         return (1./2./np.pi/ev["sigma"]**2
                 * np.exp(-dist**2 / 2. / ev["sigma"]**2))
 
+    
     def weight(self, ev, **params):
         r"""For classicLLH, no weighting of events
 
@@ -797,8 +804,8 @@ class PowerLawLLH(WeightLLH):
 
         """
 
-        if (np.sin(dec) < self.sinDec_bins[0]
-                or np.sin(dec) > self.sinDec_bins[-1]):
+        if (np.any(np.sin(dec) < self.sinDec_bins[0])
+                or np.any(np.sin(dec) > self.sinDec_bins[-1])):
             return 0., None
 
         gamma = params["gamma"]
