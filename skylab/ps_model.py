@@ -1,4 +1,3 @@
-# -*-coding:utf8-*-
 
 from __future__ import print_function
 
@@ -29,18 +28,17 @@ import numpy as np
 import scipy.interpolate
 from scipy.stats import norm
 
-##############################################################################
-# New imports for HealpyLLh
-import healpy as hp
-# Status bar for long caching of healpy maps
-from tqdm import tqdm
-# My analysis tools
-import anapymods.healpy as amp_hp
-##############################################################################
-
 # local package imports
 from . import set_pars
 from .utils import kernel_func
+
+############################################################################
+# HealpyLLH extra imports
+import healpy as hp
+# - My analysis tools
+import anapymods.healpy as amp_hp
+############################################################################
+
 
 # get module logger
 def trace(self, message, *args, **kwargs):
@@ -48,6 +46,7 @@ def trace(self, message, *args, **kwargs):
     """
     if self.isEnabledFor(5):
         self._log(5, message, args, **kwargs)
+
 
 logging.addLevelName(5, "TRACE")
 logging.Logger.trace = trace
@@ -73,11 +72,6 @@ _precision = 0.1
 _par_val = np.nan
 _parab_cache = np.zeros((0, ), dtype=[("S1", np.float), ("a", np.float),
                                       ("b", np.float)])
-
-##############################################################################
-# HealpyLLH variable defaults. Further explanations in class
-_cached_exp_maps = None
-##############################################################################
 
 
 class NullModel(object):
@@ -303,7 +297,7 @@ class ClassicLLH(NullModel):
         Parameters
         -----------
         ev : structured array
-            Event array, important information *sinDec* for this calculation
+            Event array, importand information *sinDec* for this calculation
 
         Returns
         --------
@@ -887,14 +881,43 @@ class EnergyLLHfixed(EnergyLLH):
         return
 
 
+############################################################################
+# HealpyLLH
+############################################################################
+def _multi_proc_sig(args):
+    """
+    Multiprocessing wrapper around the single pixel convolution step in
+    the signal calculation, to execute the signal calculation in parallel.
 
-##############################################################################
-# New Healpy LLH
-##############################################################################
+     Parameters
+     ----------
+     args : tupel
+        Wrapper tupel args=(th, phi, sigma) for the arguments of
+        amp_hp.single_pixel_gaussian_convolution():
+        self : class instance
+            Used to acces calss attributes. Multiprocessings cann only
+            handle functions outside any instance because it uses
+            serialization.
+        th : float
+            Current events healpy coordinate theta.
+        phi : float
+            Current events healpy coordinate phi.
+        smooth_sigma : float
+            Current events angular error sigma used for the smoothing
+            kernel sigma.
+    """
+    self_, th, phi, smooth_sigma = args
+    result = amp_hp.single_pixel_gaussian_convolution(
+        m=self_._spatial_pdf_map, th=th, phi=phi,
+        sigma=smooth_sigma, clip=self_._clip
+    )
+    return result
+
+
 class HealpyLLH(ClassicLLH):
     r"""
     Extending the ClassicLLH model to be able to use stacking and handle
-    extended sources by using healpy maps as signal and source pdfs.
+    extended sources by using healpy maps as spatial signal pdfs.
 
     The signal pdf gets modified according to the stacking ansatz described in
     `Astr.Phys.J. 636:680-684, 2006 <http://arxiv.org/abs/astro-ph/0507120>`_.
@@ -909,40 +932,38 @@ class HealpyLLH(ClassicLLH):
 
     .. math:: \mathcal{S}^{tot} = \frac{\sum W^j R^j S_i^j}{\sum W^j R^j}
 
-    Spatial signal pdfs are described by healpy maps which gets folded with the
-    event sigma to create a combined directional pdf for each event.
+    Spatial signal pdfs are described by healpy maps which gets folded with
+    the event sigma to create a combined directional pdf for each event.
     """
-    # Default values for HealpyLLH class. Can be overwritten in constructor
-    # by setting the attribute as keyword argument
-    _cached_exp_maps = _cached_exp_maps
+    # Clip kernel at clip*sigma
+    _clip = 3.
+    # Get this value for multiprocessing from the HealpyLLH class
+    _ncpu = 1
 
-    def __init__(self, *args, **kwargs):
+    def _make_spatial_pdf_map(self, src):
         r"""
-        Pass init to ClassicLLH as it is identical.
+        Wrapper to make a spatial src map pdf from maps and weights.
+
+        Parameters
+        ----------
+        src : record array
+            Record array containing the source information. Needed fields are
+            sigma : array
+                Valid healpy map containing the spatial source pdf.
+            normw : Float
+                Containing the normed total weight per soruce. The total
+                weight is the theoretical and the detector weight the
+                source.
+
+        Returns
+        -------
+        spatial_pdf_map : healpy map
+            Single map containing added weighted submaps and normed to area=1.
         """
-        super(HealpyLLH, self).__init__(*args, **kwargs)
-
-        return
-
-
-     # INTERNAL METHODS
-    def _convolve_maps(self, m, sigma):
-        """
-        This function does:
-        1. Smooth the given map m with every given sigma (aka gaussian
-           convolution). Progress is tracked with tqdm because this may take
-           a while.
-        2. After convolution make a pdf from every map
-        3. Put everything in an array and return that
-        """
-        convolved_maps = np.array(
-            [amp_hp.norm_healpy_map(
-                hp.smoothing(m, sigma=sigma_evi, verbose=False)
-                )
-            for sigma_evi in tqdm(sigma)]
-            )
-
-        return convolved_maps
+        added_map = self._add_weighted_maps(src["sigma"], src["normw"])
+        self._spatial_pdf_map = amp_hp.norm_healpy_map(added_map)
+        self._nside = hp.get_nside(added_map)
+        return self._spatial_pdf_map
 
     def _add_weighted_maps(self, m, w):
         """
@@ -956,102 +977,169 @@ class HealpyLLH(ClassicLLH):
             raise ValueError("Lenghts of map and weight vector don't match.")
         return np.sum(m * w)
 
-        """
-        Use maps m and weights w to combine them to a single added map.
-        """
-        # Make sure we have arrays
-        m = np.atleast_1d(m)
-        w = np.atleast_1d(w)
-        if len(w) != len(m):
-            raise ValueError("Lenghts of map and weight vector don't match.")
-        # First make column vector from weights to easily multiply
-        nsrcs = len(w)
-        # Multiply each map with its weight and sum to get a single map
-        return np.sum(w * m)
-
-
-    # GETTER / SETTER
-    # Smoothed exp healpy maps are cached to shorten signal computation
-    @property
-    def cached_exp_maps(self):
-        return self._cached_exp_maps
-    @cached_exp_maps.setter
-    def cached_exp_maps(self, maps):
-        # This will throw a TypeError, if maps are not valid hp maps
-        hp.maptype(maps)
-        self._cached_exp_maps = maps
-        print("set the map cache up")
-        return
-
-
     # PUBLIC METHODS
-    def signal(self, ev, inj=None, src_map=None):
+    def signal(self, ev):
         r"""
-        Spatial probability of event i coming from extended source j.
-        Signal pdf for every event is the src healpy map convolved with every
-        event reconstructional sigma.
+        Spatial probability of each event i coming from extended source j.
+        For each event a combinded source map is created and the spatial
+        signal values is the value of this maps at the events position.
+        To ensure fast execution for every event, only the single pixel at
+        each events position is folded in pixel space with a clipped kernel.
 
         Parameters
         -----------
         ev : structured array
-            Event array, import information: sinDec, ra, sigma
-        inj : structured array
-            Injected event array, import information: sinDec, ra, sigma.
-            Is `None` if no event is injected.
-        src_map : structured array
-            Single healpy map, containing the combined spatial source pdf.
-            This is derived by adding the weighted src healpy maps and
-            normalizing to a pdf.
-            Only needed when signal is injected and inj is not None.
+            Event array, import information: dec, ra, sigma. Combined events
+            from exp and mc, selected in the `psLLH._select_events()` internal
+            method.
 
         Returns
         --------
         S : array-like
-            Spatial signal probability for each event in ev and inj.
+            Spatial signal probability for each event in ev.
         """
-        # Check if we have cached exp maps, should always be the case
-        if self.cached_exp_maps is None:
-            raise ValueError("We don't have cached maps, need to add sources"
-            + " first using `use_source()`")
+        def angdist(fix_phi, fix_th, phi, sinTh):
+            """
+            Calculate angular distance between a healpy direction
+            (fix_phi, fix_th) and multiple other positions (phi, dec).
+            Hopefully the fastest way to do this...
 
-        # Make temporary map/ev collection for combined ev, inj sample
-        _maps = self.cached_exp_maps
-        _ev = ev
+            Parameters
+            ----------
+            fix_phi, fix_th : float
+                Fixed position in phi, theta (radians) to which all distances
+                are calculated against.
+            phi, sinTh : array
+                Multiple positions in phi, theta (radians) for which the
+                distances to (fix_phi, fix_th) is calculated.
 
-        # First make pdfs for injected events if there are any and append
-        if inj is not None:
-            if src_map is not None:
-                print("Start convolving src map with injected event sigmas.")
-                inj_maps = self._convolve_maps(src_map, inj["sigma"])
-                # Append to cached maps/exp events (inj/ev must have same keys)
-                _maps = np.append(_maps, inj_maps, axis=0)
-                _ev = np.append(_ev, inj)
-            else:
-                raise ValueError("src_map is None. If inj is containing"
-                    + " events, a src_map must be given.")
+            Returns
+            -------
+            dist : array
+                Distances in radian.
+            """
+            # Note: This differs from the PS signal distance, because the
+            #       normal spherical coords (not equatorial) are used.
+            cosDist = (np.cos(fix_phi - phi) * np.sin(fix_th) * sinTh +
+                       np.cos(fix_th) * np.sqrt(1. - sinTh**2))
+            # handle possible floating precision errors
+            cosDist[cosDist > 1] = 1.
+            dist = np.arccos(cosDist)
+            return dist
 
-        # Get pdf values for each event. First get pixel indices for events
-        NSIDE = hp.get_nside(_maps[0])
-        NPIX = hp.nside2npix(NSIDE)
-        # Shift RA, DEC to healpy coordinates for proper use of pix indices
-        th, phi = amp_hp.DecRaToThetaPhi(_ev["dec"], _ev["ra"])
-        pixind = hp.ang2pix(NSIDE, th, phi)
+        def gaussian_on_a_sphere(mean_th, mean_phi, sigma):
+            """
+            This function returns a 2D normal pdf on a discretized healpy grid.
+            To chose the function values correctly in spherical coordinates,
+            the true angular distances to the mean are used.
 
-        # For every src location get the correct pdf signal value.
+            Pixels farther away from the mean than clip * sigma are clipped
+            because the normal distribution falls quickly to zero. The error
+            made by this can be easily estimated and a discussion can be found
+            in [arXiv:1005.1929](https://arxiv.org/abs/1005.1929v2).
+
+            Parameters
+            ----------
+            mean_th : float
+                Position of the mean in healpy coordinate `theta`. `theta` is in
+                [0, pi] going from north to south pole.
+            mean_phi : float
+                Position of the mean in healpy coordinate `phi`. `phi` is in [0, 2pi]
+                and is equivalent to the azimuth angle.
+            sigma : float
+                Standard deviation of the 2D normal distribution. Only symmetric
+                normal pdfs are used here.
+
+            Returns
+            -------
+            kernel : array
+                Values of the 2D normal distribution at the selected pixels. If clip
+                False, kernel is a valid healpy map with resolution NSIDE.
+            keep_idx : array
+                Pixel indices that are kept from the full healpy map after clipping.
+                If clip is False this is a sorted integer array with values
+                [0, 1, ..., NPIX-1] with NPIX tha number of pixels in the full healpy
+                map with resolution NSIDE.
+            """
+            # Clip unneccessary pixels, just keep clip*sigma (radians)
+            # around the mean. Using inlusive=True to make sure at least
+            # one pixel gets returned.
+            # Always returns a list, so no manual np.array() required.
+            keep_idx = hp.query_disc(
+                self._nside, hp.ang2vec(mean_th, mean_phi),
+                self._clip * sigma, inclusive=True)
+
+            # Create only the needed the pixel healpy coordinates
+            th, phi = hp.pix2ang(self._nside, keep_idx)
+            sinTh = np.sin(th)
+
+            # For each pixel get the distance to (mean_th, mean_phi) direction
+            dist = angdist(mean_phi, mean_th, phi, sinTh)
+
+            # Get the 2D gaussian values at those distances -> kernel function
+            # Because the kernel is radial symmetric we use a simplified
+            # version -> 1D gaussian, properly normed
+            sigma2 = 2 * sigma**2
+            kernel = np.exp(-dist**2 / sigma2) / (np.pi * sigma2)
+
+            return kernel, keep_idx
+
+        def single_pixel_gaussian_convolution(th, phi, sigma):
+            """
+            Calculates the convolution of the pixel on the healpy map `m`
+            with a 2D gaussian kernel centered at healpy coordinates theta,
+            phi with standard deviation sigma.
+
+            For performance reasons the kernel is clipped.
+            The convolution is a simple linear combination of map :math:`M`
+            and kernel :math:`K` values:
+
+            ..math:
+
+              (\mathrm{Pix}_\mathrm{conv})_i = \sum_j K_j(\theta, \phi)\cdot M_j
+
+            Parameters
+            ----------
+            m : array
+                Valid healpy map.
+            th : float
+                Position of the mean in healpy coordinate `theta`. `theta` is
+                in [0, pi] going from north to south pole.
+            phi : float
+                Position of the mean in healpy coordinate `phi`. `phi` is in
+                [0, 2pi] and is equivalent to the azimuth angle.
+            sigma : float
+                Standard deviation of the 2D normal distribution. Only symmetric
+                normal pdfs are used here. Passed to `gaussian_on_a_sphere()`.
+
+            Returns
+            -------
+            conv_pix : float
+                Value of the single pixel of the convolved map at the given position.
+            """
+            # Get the clipped kernel map
+            kernel, keep_idx = gaussian_on_a_sphere(
+                mean_th=th, mean_phi=phi, sigma=sigma)
+
+            # Normalize kernel after cutoff to ensure normalized pdfs
+            kernel = kernel / np.sum(kernel)
+
+            # Now convolve the kernel and the given map for the pixel at pixind only.
+            # This is just a linear combination of weighted pixel values selected by
+            # the kernel map.
+            conv_pix = np.sum(self._spatial_pdf_map[keep_idx] * kernel)
+
+            return conv_pix
+
+        # Shift RA, DEC to healpy coordinates to use it in
+        # single_pixel_gaussian_convolution().
+        th, phi = amp_hp.DecRaToThetaPhi(ev["dec"], ev["ra"])
+
+        # For every event get the single convolved pixel at its location.
         # Because the src maps were added with the weight beforehand, this
-        # already is the stacked llh value for the signal
-        S = [_maps[i][ind] for i, ind in enumerate(pixind)]
+        # already is the stacked signal llh value for each event.
+        S = [single_pixel_gaussian_convolution(
+            th=th_i, phi=phi_i, sigma=sig_i)
+            for th_i, phi_i, sig_i in zip(th, phi, ev["sigma"])]
 
         return np.array(S)
-
-
-    def reset_map_cache(self):
-        r"""
-        Reset all cached maps. Map cache is better decoupled from the
-        ClassicLLH cache.
-        """
-        self._cached_exp_maps = _cached_exp_maps
-        return
-
-
-
