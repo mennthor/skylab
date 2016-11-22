@@ -885,51 +885,14 @@ class EnergyLLHfixed(EnergyLLH):
 # StackingPointSourceLLH
 ############################################################################
 class StackingPointSourceLLH(ClassicLLH):
-    def _make_spatial_pdf_map(self, src):
-        r"""
-        Wrapper to make a spatial src map pdf from maps and weights.
-
-        Parameters
-        ----------
-        src : record array
-            Record array containing the source information. Needed fields are
-            sigma : array
-                Valid healpy map containing the spatial source pdf.
-            normw : Float
-                Containing the normed total weight per soruce. The total
-                weight is the theoretical and the detector weight the
-                source.
-
-        Returns
-        -------
-        spatial_pdf_map : healpy map
-            Single map containing added weighted submaps and normed to area=1.
-        """
-        added_map = self._add_weighted_maps(src["sigma"], src["normw"])
-        self._spatial_pdf_map = amp_hp.norm_healpy_map(added_map)
-        self._nside = hp.get_nside(added_map)
-        return self._spatial_pdf_map
-
-    def _add_weighted_maps(self, m, w):
-        """
-        Add weighted healpy maps. Lenght of maps m and weights w must match.
-        Maps and weights both must be of shape (nsrcs, ).
-        """
-        # Make sure we have arrays
-        m = np.atleast_1d(m)
-        w = np.atleast_1d(w)
-        if len(w) != len(m):
-            raise ValueError("Lenghts of map and weight vector don't match.")
-        return np.sum(m * w)
-
-    # PUBLIC METHODS
-    def signal(self, src_ra, src_dec, src_w, ev):
+    def signal(self, src_ra, src_dec, src_norm_w, ev):
         # Shortcut for the super signal function
         sup_sig = super(StackingPointSourceLLH, self).signal
+
         # Create Signal for every src position
         S = np.zeros((len(src_ra), len(ev)), dtype=np.float)
         for i, (src_rai, src_deci, src_wi) in enumerate(zip(
-                src_ra, src_dec, src_w)):
+                src_ra, src_dec, src_norm_w)):
             S[i] = src_wi * sup_sig(src_rai, src_deci, ev)
 
         # Stacking: For every event sum up weighted contribution from every
