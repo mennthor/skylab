@@ -2141,85 +2141,12 @@ def fs(args):
 
 
 ############################################################################
-# HealpyLLH
+# StackingPointSourceLLH
 ############################################################################
-class HealpyLLH(PointSourceLLH):
-    r"""
-    HealpyLLH class
-    """
-    # Default values for psLLH class. Can be overwritten in constructor
-    # by setting the attribute as keyword argument
-    _log_level = _log_level
-    _out_print = _out_print
-
-    # LLH model
-    _llh_model = None
-
-    # settings for fitting
-    _nsource = _nsource
-    _nsource_bounds = _nsource_bounds
-    _nsource_rho = _nsource_rho
-
-    # multiprocessing
-    _ncpu = 1
-
-    # Data sample
-    _fix = False
-    _livetime = _livetime
-
-    # event selection
-    _delta_ang = _delta_ang
-    _mode = "all"
-    _thresh_S = _thresh_S
-
-    # events in current selection for llh evaluation
-    _n = _n
-    _ev = _ev
-    _ev_S = _ev_S
-
-    def __init__(self, exp, mc, livetime,
-                 scramble=True, upscale=False, **kwargs):
-        r"""
-        Catches 'llh_model' keyword given and sets it to `HealpyLLH`.
-        Passes the rest to super class init.
-        """
-        if kwargs.pop("mode", "all") != "all":
-            raise ValueError("mode must be 'all' for HealpyLLH.")
-        self.mode = "all"
-
-        llh_model = kwargs.pop("llh_model", ps_model.HealpyLLH())
-        if not isinstance(llh_model, ps_model.HealpyLLH):
-            raise TypeError("LLH model must be instance of ps_model.HealpyLLH")
-
-        # Give the HealpyLLH model the same ncpu number for parallelizing the
-        # signal computation
-        llh_model._ncpu = self._ncpu
-
-        kwargs["llh_model"] = llh_model
-        kwargs["mode"] = "all"
-
-        # Make MC class variable and add sinDec field
-        self.mc = mc
-        if "sinDec" not in mc.dtype.fields:
-            self.mc = numpy.lib.recfunctions.append_fields(
-                mc, "sinDec", np.sin(mc["dec"]),
-                dtypes=np.float, usemask=False
-            )
-
-        super(HealpyLLH, self).__init__(
-            exp, self.mc, livetime, scramble, upscale, **kwargs)
-
-        return
-
+class StackingPointSourceLLH(PointSourceLLH):
     def __str__(self, verb=False):
-        r"""
-        String representation of class.
-
-        Just added information about the given sources. Print super info with
-        `print(class_obj.__str__(verb=True))`
-        """
         if verb:
-            sout = super(HealpyLLH, self).__str__() + "\n"
+            sout = super(StackingPointSourceLLH, self).__str__() + "\n"
         else:
             sout = ""
 
@@ -2238,334 +2165,80 @@ class HealpyLLH(PointSourceLLH):
         return sout
 
     # INTERNAL METHODS
-    def _select_events(self, src_ra=np.nan, src_dec=np.nan, **kwargs):
-        r"""
-        Select events around source location(s) used in llh calculation.
-
-        Parameters
-        ----------
-        src_ra src_dec : float, array_like
-            Rightascension and Declination of source(s).
-            Has currently no effect, because mode is always 'all'.
-
-        Other parameters
-        ----------------
-        scramble : bool
-            Scramble rightascension of exp events prior to selection.
-        inject : numpy_structured_array
-            Events to add to the selected events, fields equal to exp. data.
-        """
-        # Get kwargs
-        scramble = kwargs.pop("scramble", False)
-        inj = kwargs.pop("inject", None)
-        if kwargs:
-            raise ValueError("Don't know arguments", kwargs.keys())
-
-        # reset
-        self.reset()
-
-        # number of total events
-        self._N = len(self.exp)
-
-        # Double check if mode is 'all'
-        if self.mode == "all":
-            # all events are selected
-            exp_mask = np.ones_like(self.exp["sinDec"], dtype=np.bool)
-        else:
-            raise ValueError("Not supported mode: {0:s}".format(self.mode))
-
-        # update the zenith selection and background probability
-        self._ev = self.exp[exp_mask]
-
-        # update rightascension information for scrambled events
-        if scramble and not self.fix:
-            self._ev["ra"] = self.random.uniform(0., 2. * np.pi,
-                                                 size=len(self._ev))
-
-        if inj is not None:
-            self._ev = np.append(
-                self._ev,
-                numpy.lib.recfunctions.append_fields(
-                    inj, "B", self.llh_model.background(inj),
-                    usemask=False
-                )
-            )
-            # Update total event number
-            self._N += len(inj)
-
-        # calculate signal term
-        self._ev_S = self.llh_model.signal(self._ev)
-
-        # do not calculate values with signal below threshold
-        ev_mask = self._ev_S > self.thresh_S
-        self._ev = self._ev[ev_mask]
-        self._ev_S = self._ev_S[ev_mask]
-
-        # set number of selected events
-        self._n = len(self._ev)
-
-        if (self._n < 1 and
-            (np.sin(self._src_dec) < self.sinDec_range[0] and
-                np.sin(self._src_dec) > self.sinDec_range[-1])):
-            logger.error("No event was selected, fit will go to -infinity")
-
-        return
 
     # PROPERTIES for public variables using getters and setters
-    # LLH model setter only accepts HealpyLLH models
+    # prior_skymap for constrining the position fit of the sources
     @property
-    def llh_model(self):
-        return self._llh_model
+    def prior_skymap(self):
+        return self._prior_skymap
 
-    @llh_model.setter
-    def llh_model(self, args):
-        if len(args) != 2:
-            raise ValueError("LLH model needs the class and mc-array as input")
-        val, mc = args
-        if not isinstance(val, ps_model.HealpyLLH):
-            raise TypeError("LLH model must be instance of ps_model.HealpyLLH")
-        # set likelihood module to variable and fill it with data
-        self._llh_model = val
-        self._llh_model(self.exp, mc, self.livetime)
+    @prior_skymap.setter
+    def prior_skymap(self, skymap):
+        self._prior_skymap = skymap
         return
-
-    # Mode must always be 'all'
-    @property
-    def mode(self):
-        return self._mode
-
-    @mode.setter
-    def mode(self, val):
-        if val != "all":
-            raise ValueError("mode must be 'all' for HealpyLLH.")
-        self._mode = val
-        return
-
-    # Set the _ncpu to the llh_model as well. Overwrite superclass setter
-    @property
-    def ncpu(self):
-        return self._ncpu
-
-    @ncpu.setter
-    def ncpu(self, val):
-        if int(val) > multiprocessing.cpu_count():
-            logger.warn("Assigning more workers than available number of cpu")
-        elif int(val) < 1:
-            raise ValueError("Need at least one cpu to work with")
-
-        self._ncpu = int(val)
-        self.llh_model._ncpu = self.ncpu
-
-        return
-
-    # If someone wants to view the combined spatial source map return it here
-    @property
-    def spatial_pdf_map(self):
-        return self.llh_model._spatial_pdf_map
 
     # PUBLIC methods
-    def use_sources(self, src):
-        r"""
-        Use this function to give a list of sources prior to calculating
-        anything. This is different to the standard PointSourceLLH in which
-        each function gets a single source in the argument.
-
-        Here we calculate each sources detector acceptance weight using the
-        background spline from data and combine all source maps to a single
-        spatial source map, to speed up signal evaluation.
-
-        Parameters
-        ----------
-        src is a numpy record array with the following fields:
-            ra, dec: array
-                 Position of the sources in equatorial coordinates.
-            weight : array
-                Theoretical (or intrinsic) weight for each source.
-            sigma : array
-               List of healpy maps. The maps are convolved with a gaussian with
-               the reconstruction sigma of each event and used as the spatial
-               pdf for each event. (dtype is object or numpy.ndarray)
+    def set_srcs(self, src_ra, src_dec, src_w):
         """
-        # Reset all previously cached values and the map cache
+        Give multiple source positions and weights that are used for the
+        stacking likelihood.
+        """
         self.reset()
 
-        # Sanity checks
-        # Check if src recarray has all needed names
-        names = ["ra", "dec", "weight", "sigma"]
-        if not all(k in src.dtype.names for k in names):
-            raise KeyError(
-                "src array must have names 'ra', 'dec', 'weight' and 'sigma'")
-
-        # Check if sigma field contains valid healpy maps
-        if not hp.maptype(src["sigma"]) > 0:
-            raise ValueError("Healpy maps in 'sigma' field not valid.")
+        # make sure we are using arrays
+        src_ra = np.array(src_ra, ndmin=1)
+        src_dec = np.array(src_dec, ndmin=1)
+        src_w = np.array(src_w, ndmin=1)
 
         # Check if coordinates are valid equatorial coordinates in radians
-        if np.any(src["ra"] < 0) or np.any(src["ra"] > 2 * np.pi):
+        if np.any(src_ra < 0) or np.any(src_ra > 2 * np.pi):
             raise ValueError("RA value(s) not valid equatorial coordinates")
-        if (np.any(src["dec"] < -np.pi / 2.) or
-                np.any(src["dec"] > +np.pi / 2.)):
+        if (np.any(src_dec < -np.pi / 2.) or np.any(src_dec > +np.pi / 2.)):
             raise ValueError("DEC value(s) not valid equatorial coordinates")
 
-        # Zero weight makes no sense
-        if np.any(src["weight"] <= 0):
-            raise ValueError("Source weight(s) <= 0 detected.")
+        # Zero or smaller weights make no sense
+        if np.any(src_w <= 0):
+            raise ValueError("Invalid source weight(s) <= 0 detected.")
         # End of sanity checks
 
-        # Get number of sources
-        self._nsrcs = len(src)
-
         # Get src detector weight from BG spline -> Detector exposition
-        # for every src position. Background expects recarray with field
-        # 'sinDec' so create it first
+        #   for every src position. Background expects recarray with field
+        #   'sinDec', so create it first.
         src_sin_dec = np.zeros((self._nsrcs, ), dtype=[("sinDec", np.float)])
-        src_sin_dec["sinDec"] = np.sin(src["dec"])
+        src_sin_dec["sinDec"] = np.sin(src_dec)
         src_dec_w = self.llh_model.background(src_sin_dec)
 
         # Normalize weights: Total = (Acceptance * Theoretical Weight) / Sum
-        norm_w = src_dec_w * src["weight"]
-        norm_w = norm_w / np.sum(norm_w)
+        src_norm_w = src_dec_w * src_w
+        src_norm_w = src_norm_w / np.sum(src_norm_w)
 
-        # Add norm. total weights and detector decl. weights for later use
-        src = np.lib.recfunctions.append_fields(
-            src, "normw", norm_w, dtypes=np.float, usemask=False)
-        src = np.lib.recfunctions.append_fields(
-            src, "decw", src_dec_w, dtypes=np.float, usemask=False)
-        self._src = src
-
-        # Make spatial src_map
-        self.llh_model._make_spatial_pdf_map(src)
+        # Save as a recarray class variable
+        self._nsrcs = len(src_ra)
+        self._srcs = np.empty((self._nsrcs, ), dtype=[
+            ("ra", np.float), ("dec", np.float),
+            ("src_w", np.float), ("dec_w", np.float), ("norm_w", np.float)])
+        self._srcs["ra"] = src_ra
+        self._srcs["dec"] = src_dec
+        self._srcs["src_w"] = src_w
+        self._srcs["dec_w"] = src_dec_w
+        self._srcs["norm_w"] = src_norm_w
 
         return
 
     def fit_source(self, src_ra=np.nan, src_dec=np.nan, **kwargs):
-        r"""
-        Minimize the negative log-Likelihood for current source setup with
-        regard to injected events.
-
-        Only calls the super function but setting src_ra and src_dec to np.nan
-        as they have no effect in a stacked search. The _select_events function
-        takes care of the correct event selection.
-
-        Parameters
-        ----------
-        scramble : bool
-            Scramble events prior to selection. (default: False)
-        inject : numpy_structured_array
-            Events to add to the selected events, fields equal to exp. data.
-
-        Returns
-        -------
-        fmin : float
-            Minimal function value turned into test statistic
-            -sign(ns)*logLambda
-        xmin : dict
-            Parameters minimising the likelihood ratio.
-
-        Other parameters
-        ----------------
-        other kwargs:
-            Parameters passed to the L-BFGS-B minimiser.
-        """
-        return super(HealpyLLH, self).fit_source(
-            src_ra=np.nan, src_dec=np.nan, **kwargs)
+        raise NotImplementedError(
+            "`fit_source` is on the TODO list.")
+        return
 
     def do_trials(self, src_ra=np.nan, src_dec=np.nan, **kwargs):
-        r"""
-        Perform trials on scrambled event maps to estimate the event
-        distribution.
-
-        Only calls the super function but setting src_ra and src_dec to np.nan
-        as they have no effect in a stacked search. The _select_events function
-        takes care of the correct event selection.
-
-        Parameters
-        ----------
-        mu_gen : iterator
-            Iterator yielding injected events. Stored at ps_injector.
-        n_iter : int
-            Number of iterations to perform.
-
-        Returns
-        -------
-        trials : recarray
-            recarray with fields of fit-values and TS for number of injected
-            events.
-
-        Other parameters
-        ----------------
-        kwargs
-            Other keyword arguments are passed to the source fitting.
-        """
-        return super(HealpyLLH, self).do_trials(
-            src_ra=np.nan, src_dec=np.nan, **kwargs)
+        raise NotImplementedError(
+            "`do_trials` is on the TODO list.")
+        return
 
     def weighted_sensitivity(self, alpha, beta, inj, mc,
                              src_ra=np.nan, src_dec=np.nan, **kwargs):
-        r"""
-        Calculate the point source sensitivity for a given source
-        hypothesis using weights.
-
-        All trials calculated are used at each step and weighted using the
-        Poissonian probability. Credits for this idea goes to Asen Christov of
-        IceCube in Geneva.
-
-        Only calls the super function but setting src_ra and src_dec to np.nan
-        as they have no effect in a stacked search. The _select_events function
-        takes care of the correct event selection.
-
-        Parameters
-        ----------
-        alpha : array-like (m, )
-            Error of first kind. Sensitivity/Dis. Pot. alpha = [0.5, 5sigma]
-        beta : array-like (m, )
-            Error of second kind. Sensitivity/Dis. Pot. alpha = [0.9, 0.5]
-        inj : skylab.BaseInjector instance
-            Injection module
-        mc : numpy-recarray
-            Monte Carlo to use for injection. Needs all fields that
-            is stored in experimental data, plus true information that the
-            injector uses: trueRa, trueDec, trueE, ow
-
-        Returns
-        -------
-        dict containting the following keys:
-            flux : array-like (m, )
-                Flux needed to reach sensitivity of *alpha*, *beta*
-            mu : array-like (m, )
-                Number of injected events corresponding to flux.
-            TSval : array-like (m, )
-                TS value at value of alpha for background
-            weights : array-like (m, n)
-                Weights for all n trials corresponding to m mu values.
-            trials : recarray (n, )
-                Array containing all information about trial of each fit
-
-        Optional Parameters
-        --------------------
-        n_bckg : int
-            Number of background trials to do if needed
-        n_iter : int
-            Number of trials per iteration
-        fit : None, callable or str
-            If str, function value to fit to background, possible values are
-            one of ["chi2", "exp"]
-        fit_kw : dict
-            Arguments to pass to the fitting of the background distribution.
-        TSval : array-like (m, )
-            TS value to use for calculation, skips background fitting, and
-            alpha obsolete.
-        eps : float
-            Precision for breaking point.
-        """
-        return super(HealpyLLH, self).weighted_sensitivity(
-            src_ra=np.nan, src_dec=np.nan,
-            alpha=alpha, beta=beta, inj=inj, mc=mc, **kwargs)
-
-    def reset(self):
-        r"""Also reset event indices from `_select_events()`."""
-        self._ev_ind = _ev_ind
-        super(HealpyLLH, self).reset()
+        raise NotImplementedError(
+            "`weighted_sensitivity` is on the TODO list.")
         return
 
     # NOT IMPLEMENTED in a stacked search.
