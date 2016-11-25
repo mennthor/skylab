@@ -1554,7 +1554,7 @@ class PointSourceLLH(object):
         ####################################################################
         # Modified for StackedLLH
         src_dec = np.atleast_1d(src_dec)
-        if len(src_dec) == 1
+        if len(src_dec) == 1:
             print("Estimate Sensitivity for declination {0:5.1f} deg".format(
                 np.degrees(src_dec)))
         else:
