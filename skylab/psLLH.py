@@ -78,7 +78,7 @@ _max_iter = int(1.e5)
 _max_trial = int(1.e3)
 _min_iter = int(2.5e3)
 _min_ns = 1.
-_mode = "box"
+_mode = "all"
 _n = 0
 _n_iter = 1000
 _n_trials = int(1e5)
@@ -88,6 +88,7 @@ _nsource_bounds = (0., 1000.)
 _nsource_rho = 0.9
 _out_print = 0.1
 _pgtol = 1.e-3
+_factr = 1.e6
 _pVal = lambda TS, sinDec: TS
 _rho_max = 0.95
 _src_dec = np.nan
@@ -176,9 +177,7 @@ class PointSourceLLH(object):
     _nsource_bounds = _nsource_bounds
     _nsource_rho = _nsource_rho
 
-    #src weighting for stacking
-    _w_theo = None
-
+   
     # multiprocessing
     _ncpu = 1
 
@@ -705,18 +704,7 @@ class PointSourceLLH(object):
         self._thresh_S = float(val)
 
         return
-
-    @property
-    def w_theo(self):
-        return self._w_theo
-
-    @w_theo.setter
-    def w_theo(self, value):
-        self._w_theo = value
-
-        return
-
-
+    
     # PUBLIC methods
 
     def all_sky_scan(self, **kwargs):
@@ -1172,16 +1160,21 @@ class PointSourceLLH(object):
 
             fun, grad = self.llh(**fit_pars)
 
+            print(x,-fun, -grad)
+
             # return negative value needed for minimization
             return -fun, -grad
 
         scramble = kwargs.pop("scramble", False)
         inject = kwargs.pop("inject", None)
         kwargs.setdefault("pgtol", _pgtol)
+        stacking = kwargs.pop('stacking', False)
+        # Optional theoretical weight from the catalog
+        self._w_theo = kwargs.pop('w_theo', np.ones_like(src_dec,dtype=float))
 
-
-        # Set all weights once for this src location, if not already cached
-        self._select_events(src_ra, src_dec, inject=inject, scramble=scramble)
+        # Set all weights once for this src location,(in case of source stacking this is already done)
+        if not stacking:
+            self._select_events(src_ra, src_dec, inject=inject, scramble=scramble, w_theo=self._w_theo)
 
         if self._N < 1:
             # No events selected
@@ -1190,16 +1183,18 @@ class PointSourceLLH(object):
 
         # get seeds
         pars = self.par_seeds
+
         inds = [i for i, par in enumerate(self.params) if par in kwargs]
         pars[inds] = np.array([kwargs.pop(par) for par in self.params
                                                if par in kwargs])
-
+        
         # minimizer setup
         xmin, fmin, min_dict = scipy.optimize.fmin_l_bfgs_b(
                                 _llh, pars,
                                 bounds=self.par_bounds,
                                 **kwargs)
-
+        
+        print('gradient:', min_dict)
         # set up mindict to enter while, exit if fit looks nice
         i = 1
         while min_dict["warnflag"] == 2 and "FACTR" in min_dict["task"]:
@@ -1215,7 +1210,7 @@ class PointSourceLLH(object):
                                     **kwargs)
 
             i += 1
-
+        
         if fmin > 0 and (self.par_bounds[0][0] <= 0
                          and self.par_bounds[0][1] >= 0):
             # null hypothesis is part of minimisation, fit should be negative
@@ -1542,7 +1537,7 @@ class PointSourceLLH(object):
         n_iter = int(kwargs.pop("n_iter", _n_iter))
         eps = kwargs.pop("eps", _eps)
         fit = kwargs.pop("fit", None)
-        w_theo = kwargs.pop('w_theo', np.ones_like(np.atleast_1d(src_dec)))
+        w_theoMC = kwargs.pop('w_theoMC', np.ones_like(np.atleast_1d(src_dec)))
         
 
         if fit is not None and not hasattr(fit, "isf"):
@@ -1557,7 +1552,7 @@ class PointSourceLLH(object):
                              " same length!")
 
         # setup source injector
-        inj.fill(src_dec, mc, self.livetime, w_theo=w_theo)
+        inj.fill(src_dec, mc, self.livetime, w_theo=w_theoMC)
 
         print("Estimate Sensitivity for {0:5d} sources from declination {1:5.1f}deg to {2:5.1f}deg".format(
                 len(np.atleast_1d(src_dec)),min(np.degrees(src_dec)),max(np.degrees(src_dec))))
@@ -1975,6 +1970,8 @@ class MultiPointSourceLLH(PointSourceLLH):
                              N * self.nsource_rho if N > 0 else self.nsource)]
                          + par_seeds)
 
+    
+
     @property
     def sindec_bins(self):
         return self._sindec_bins
@@ -2044,7 +2041,7 @@ class MultiPointSourceLLH(PointSourceLLH):
             Gradient at the point *fit_pars*.
 
         """
-
+        
         src_dec = self._src_dec
         nsources = fit_pars.pop("nsources")
 
@@ -2167,9 +2164,16 @@ class StackingPointSourceLLH(PointSourceLLH):
 
         scramble = kwargs.pop("scramble", False)
         inject = kwargs.pop("inject", None)
+        # Optional theoretical source weight from the catalog
+        self._w_theo = kwargs.pop('w_theo', np.ones_like(src_dec,dtype=float))
+
+
         if kwargs:
             raise ValueError("Don't know arguments", kwargs.keys())
 
+        
+        
+        
         # reset
         self.reset()
 
@@ -2309,12 +2313,9 @@ class StackingPointSourceLLH(PointSourceLLH):
         """
 
         nsources = fit_pars.pop("nsources")
-        # Optional theoretical weight from the catalog
-        if self._w_theo is None:
-            self._w_theo = np.ones_like(self._src_dec,dtype=float)
-
+        
         assert(len(self._src_dec) == len(self._w_theo))
-
+        
 
         N = self._N
         n = self._n
@@ -2327,11 +2328,11 @@ class StackingPointSourceLLH(PointSourceLLH):
 
         #Load relative source weights
         src_w, src_w_grad = self.llh_model.effA(dec = self._src_dec, **fit_pars)
-
         #---->total source weight
         norm = np.inner(src_w, self._w_theo)
         w_tot = (src_w * self._w_theo) / norm
         w_tot_grad = (src_w_grad['gamma'] * self._w_theo) / norm
+        
 
         SoB = np.tensordot(self._ev_S, w_tot, axes=(0,0))
         SoB /= self._ev["B"]
@@ -2401,9 +2402,7 @@ class StackingPointSourceLLH(PointSourceLLH):
         return LogLambda, grad
 
 
-
-
-
+    
 
 class StackingMultiPointSourceLLH(MultiPointSourceLLH):
     r"""Class to handle multiple event samples that are distinct of each other.
@@ -2418,7 +2417,7 @@ class StackingMultiPointSourceLLH(MultiPointSourceLLH):
 
     def __init__(self, *args, **kwargs):
 
-        self._src_spline = None
+        self._w_theo = None
 
         #Same initialisation as in single point source multi year llh class
         super(StackingMultiPointSourceLLH, self).__init__(*args, **kwargs)
@@ -2477,7 +2476,6 @@ class StackingMultiPointSourceLLH(MultiPointSourceLLH):
             Gradient at the point *fit_pars*.
 
         """
-
         src_dec = self._src_dec
         nsources = fit_pars.pop("nsources")
 
@@ -2519,7 +2517,74 @@ class StackingMultiPointSourceLLH(MultiPointSourceLLH):
         return logLambda, logLambda_grad
 
 
-    
+    def fit_sources(self, src_ra, src_dec, **kwargs):
+        """Minimize the negative log-Likelihood at source positions.
+
+        Parameters
+        ----------
+        src_ra src_dec : array_like
+            Source position(s).
+
+        Returns
+        -------
+        fmin : float
+            Minimal function value turned into test statistic
+            -sign(ns)*logLambda
+        xmin : dict
+            Parameters minimising the likelihood ratio.
+
+        Other parameters
+        ----------------
+        scramble : bool
+            Scramble events prior to selection.
+
+        inject:
+            Source injector
+
+        w_theo: array_like
+            Theoretical weight for the individual sources.
+
+        kwargs
+            Parameters passed to the L-BFGS-B minimiser.
+
+        """
+        kwargs.setdefault("stacking", True)
+        kwargs.setdefault("factr", _factr)
+        scramble = kwargs.pop("scramble", False)
+        inject = kwargs.pop("inject", None)
+
+        # Optional theoretical weight from the catalog
+        self._w_theo = kwargs.pop('w_theo', np.ones_like(src_dec,dtype=float))
+
+        # short scan of the llh space to get the seed values
+        x1 = np.arange(5,100,step=30,dtype=float)
+        dx1 = np.mean(np.diff(x1))
+        x2 = np.array([2., 3.])
+        dx2 = np.mean(np.diff(x2))
+
+        # Select events here already
+        self._select_events(src_ra, src_dec, inject=inject, scramble=scramble, w_theo=self._w_theo)
+        N = 1
+        Z = np.reshape([[-self.llh(nsources=x_i, gamma=y_i)[0]
+                            for x_i in x1[::N]]
+                            for y_i in x2[::N]],
+                (len(x2[::N]), len(x1[::N])))
+
+
+        Z = np.ma.masked_array(Z) - np.amin(Z[np.isfinite(Z)])
+        Z.mask = ~np.isfinite(Z)
+
+
+        min_ind = np.unravel_index(Z.argmin(), Z.shape)
+        x1_min = x1[::N][min_ind[1]]
+        x2_min = x2[::N][min_ind[0]]
+
+        
+        self.par_seeds = np.array([x1_min, x2_min])
+        fmin,xmin = self.fit_source(src_ra, src_dec, **kwargs)
+        
+        return fmin, xmin
+
 
     def source_weights(self, src_dec, **fit_pars):
 
@@ -2542,13 +2607,10 @@ class StackingMultiPointSourceLLH(MultiPointSourceLLH):
 
         """
 
-        # Optional theoretical weight from the catalog
-        if self._w_theo is None:
-            self._w_theo = np.ones_like(self._src_dec,dtype=float)
-
-        assert(len(src_dec) == len(self._w_theo))
-
-        w_theo = self._w_theo
+        if self._w_theo is not None:
+            w_theo = self._w_theo
+        else:
+            w_theo = np.ones_like(src_dec)
         w_b = np.empty((len(self._enum), len(src_dec)), dtype=np.float)
         dw_b = np.zeros((len(self._enum), len(src_dec), len(self.params) - 1),
                                                   dtype=np.float)
@@ -2603,6 +2665,20 @@ class StackingMultiPointSourceLLH(MultiPointSourceLLH):
         return w, grad_w
 
 
+    @property
+    def par_seeds(self):
+
+        return self._par_seeds
+
+    @par_seeds.setter
+    def par_seeds(self, value):
+        n = 1 + len(self.params[1:])
+        if len(np.atleast_1d(value)) != n:
+            raise ValueError("All seed have to be set!")
+
+        self._par_seeds = value
+
+        return
 
 
 
