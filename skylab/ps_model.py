@@ -803,15 +803,22 @@ class PowerLawLLH(WeightLLH):
             Gradient at given point(s).
 
         """
+        dec = np.atleast_1d(dec)
+        mask = (np.sin(dec) < self.sinDec_bins[0])|(np.sin(dec) > self.sinDec_bins[-1])
+        #if np.any(mask):
+        #    logger.warn('{0:3d} of {1:3d} sources outside of data declination range!'.format(np.count_nonzero(mask),len(mask)))
 
-        if (np.any(np.sin(dec) < self.sinDec_bins[0])
-                or np.any(np.sin(dec) > self.sinDec_bins[-1])):
+        if (np.all(mask) and (len(dec) == 1)):
             return 0., None
 
         gamma = params["gamma"]
 
         val = np.exp(self._spl_effA(np.sin(dec), gamma, grid=False, dy=0.))
         grad = val * self._spl_effA(np.sin(dec), gamma, grid=False, dy=1.)
+
+        #set the effA and gradient of all sources outside the bin range to 0
+        val[mask] = 0.
+        grad[mask] = 0.
 
         return val, dict(gamma=grad)
 
