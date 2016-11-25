@@ -2154,6 +2154,8 @@ def fs(args):
 # StackingPointSourceLLH
 ############################################################################
 class StackingPointSourceLLH(PointSourceLLH):
+    _src = None
+
     def __str__(self, verb=False):
         if verb:
             sout = super(StackingPointSourceLLH, self).__str__() + "\n"
@@ -2175,6 +2177,110 @@ class StackingPointSourceLLH(PointSourceLLH):
         return sout
 
     # INTERNAL METHODS
+    def _select_events(self, src_ra, src_dec, **kwargs):
+        scramble = kwargs.pop("scramble", False)
+        inject = kwargs.pop("inject", None)
+        if kwargs:
+            raise ValueError("Don't know arguments", kwargs.keys())
+
+        _src_ra = np.atleast_1d(src_ra)
+        _src_dec = np.atleast_1d(src_dec)
+
+        # reset
+        self.reset()
+
+        # number of total events
+        self._N = len(self.exp)
+
+        # Selection all or declinations bands
+        if self.mode == "all":
+            # All events are selected
+            exp_mask = np.ones_like(self.exp["sinDec"], dtype=np.bool)
+        elif self.mode in ["band", "box"]:
+            # StackingLLH: Loop over all given src positions and select events.
+            # First make sure we're working with arrays.
+            min_decs = []
+            max_decs = []
+            # Save dec mask per src for use in 'box' mode
+            dec_mask = []
+            exp_mask = np.zeros_like(self.exp["sinDec"], dtype=np.bool)
+            for src_ra, src_dec in zip(_src_ra, _src_dec):
+                # Get the zenith band with correct boundaries for current src
+                min_dec = max(-np.pi / 2., src_dec - self.delta_ang)
+                max_dec = min(np.pi / 2., src_dec + self.delta_ang)
+
+                # Save for use in box mode
+                min_decs += [min_dec]
+                max_decs += [max_dec]
+
+                dPhi = 2. * np.pi
+
+                # Get events that are within the declination band
+                mask = ((self.exp["sinDec"] > np.sin(min_dec)) &
+                        (self.exp["sinDec"] < np.sin(max_dec)))
+                # Update incremental and total dec mask
+                dec_mask += [mask]
+                exp_mask = exp_mask | mask
+        else:
+            raise ValueError("Not supported mode: {0:s}".format(self.mode))
+
+        # Update rightascension information for scrambled events.
+        # Use total dec mask to only generate as much as needed.
+        _ra = self.exp["ra"]
+        if scramble and not self.fix:
+            _ra = np.zeros_like(self.exp["sinDec"]) - 1.
+            _ra[exp_mask] = self.random.uniform(0., 2. * np.pi,
+                size=np.sum(exp_mask))
+
+        # Selection in rightascension
+        if self.mode == "box":
+            exp_mask = np.zeros_like(self.exp["sinDec"], dtype=np.bool)
+            for src_ra, min_dec, max_dec, dec_mask_i in zip(
+                    _src_ra, min_decs, max_decs, dec_mask):
+                # The solid angle
+                #     dOmega = dRA * dSinDec = dRA * dDec * cos(dec)
+                # is a function of declination, i.e. for a constant dOmega,
+                # the rightascension value has to change with declination.
+                cosFact = np.amin(np.cos([min_dec, max_dec]))
+                dPhi = np.amin([2. * np.pi, 2. * self.delta_ang / cosFact])
+                ra_dist = np.fabs((_ra - src_ra + np.pi) %
+                                  (2. * np.pi) - np.pi)
+                ra_mask = ra_dist < dPhi / 2.
+                # For each src keep box around center
+                src_box_mask = ra_mask & dec_mask_i
+                exp_mask[src_box_mask] = True
+
+        # Update the event selection and background probability
+        self._ev = self.exp[exp_mask]
+
+        self._src_ra = _src_ra
+        self._src_dec = _src_dec
+
+        if inject is not None:
+            self._ev = np.append(self._ev,
+                                 numpy.lib.recfunctions.append_fields(
+                                     inject, "B",
+                                     self.llh_model.background(inject),
+                                     usemask=False))
+
+            self._N += len(inject)
+
+        # Calculate signal term for remaining events
+        self._ev_S = self.llh_model.signal(src_ra, src_dec, src_w, self._ev)
+
+        # Do not further use events with signal values below threshold
+        ev_mask = self._ev_S > self.thresh_S
+        self._ev = self._ev[ev_mask]
+        self._ev_S = self._ev_S[ev_mask]
+
+        # set number of selected events
+        self._n = len(self._ev)
+
+        if (self._n < 1 and (np.sin(self._src_dec) < self.sinDec_range[0] and
+                             np.sin(self._src_dec) > self.sinDec_range[-1])):
+            logger.error("No event was selected, fit will go to -infinity")
+
+        return
 
     # PROPERTIES for public variables using getters and setters
     # prior_skymap for constrining the position fit of the sources
