@@ -1551,8 +1551,20 @@ class PointSourceLLH(object):
         # setup source injector
         inj.fill(src_dec, mc, self.livetime)
 
-        print("Estimate Sensitivity for declination {0:5.1f} deg".format(
+        ####################################################################
+        # Modified for StackedLLH
+        src_dec = np.atleast_1d(src_dec)
+        if len(src_dec) == 1
+            print("Estimate Sensitivity for declination {0:5.1f} deg".format(
                 np.degrees(src_dec)))
+        else:
+            np.set_printoptions(precision=2)
+            print("Estimate stacked Sensitivity for sources at {} deg".format(
+                np.degrees(src_dec)))
+            np.set_printoptions(edgeitems=3, infstr='inf', linewidth=75,
+                                nanstr='nan', precision=8, suppress=False,
+                                threshold=1000, formatter=None)
+        ####################################################################
 
         # result list
         TS = list()
