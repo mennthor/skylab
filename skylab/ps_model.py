@@ -886,14 +886,12 @@ class EnergyLLHfixed(EnergyLLH):
 ############################################################################
 class StackingPointSourceLLH(ClassicLLH):
     def signal(self, src_ra, src_dec, src_norm_w, ev):
-        # Shortcut for the super signal function
-        sup_sig = super(StackingPointSourceLLH, self).signal
-
         # Create Signal for every src position
         S = np.zeros((len(src_ra), len(ev)), dtype=np.float)
         for i, (src_rai, src_deci, src_wi) in enumerate(zip(
                 src_ra, src_dec, src_norm_w)):
-            S[i] = src_wi * sup_sig(src_rai, src_deci, ev)
+            S[i] = src_wi * super(StackingPointSourceLLH, self).signal(
+                src_rai, src_deci, ev)
 
         # Stacking: For every event sum up weighted contribution from every
         #           source signal j.
