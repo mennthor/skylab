@@ -2179,9 +2179,13 @@ class StackingPointSourceLLH(PointSourceLLH):
         _src_ra = np.atleast_1d(src_ra)
         _src_dec = np.atleast_1d(src_dec)
 
-        _src_ra = self._src["ra"]
-        _src_dec = self._src["dec"]
-        _src_w = self._src["norm_w"]
+        if self._src is not None:
+            _src_ra = self._src["ra"]
+            _src_dec = self._src["dec"]
+            _src_w = self._src["norm_w"]
+        else:
+            raise ValueError("src list is None. Use `set_srcs()` to give one" +
+                             " or mutliple src locations.")
 
         # reset
         self.reset()
@@ -2281,7 +2285,7 @@ class StackingPointSourceLLH(PointSourceLLH):
         return
 
     # PROPERTIES for public variables using getters and setters
-    # prior_skymap for constrining the position fit of the sources
+    # prior_skymap for constraining the position of the sources in the llh fit.
     @property
     def prior_skymap(self):
         return self._prior_skymap
@@ -2291,8 +2295,11 @@ class StackingPointSourceLLH(PointSourceLLH):
         self._prior_skymap = skymap
         return
 
-    # PUBLIC methods
-    def set_srcs(self, src_ra, src_dec, src_w):
+    @property
+    def src(self):
+        return self._src
+    @src.setter
+    def src(self, src_ra, src_dec, src_w):
         """
         Give multiple source positions and weights that are used for the
         stacking likelihood.
@@ -2340,6 +2347,7 @@ class StackingPointSourceLLH(PointSourceLLH):
 
         return
 
+    # PUBLIC methods
     def fit_source(self, src_ra=np.nan, src_dec=np.nan, **kwargs):
         raise NotImplementedError(
             "`fit_source` is on the TODO list.")
