@@ -2167,11 +2167,11 @@ class StackingPointSourceLLH(PointSourceLLH):
             sout += "src list : no srcs given yet.\n"
         else:
             sout += "src list : {} srcs given\n".format(self._nsrcs)
-            sout += "    DECs         : {}\n".format(self._src["dec"])
             sout += "    RAs          : {}\n".format(self._src["ra"])
-            sout += "    src. weights : {}\n".format(self._src["weight"])
-            sout += "    det. weights : {}\n".format(self._src["decw"])
-            sout += "    normed w_tot : {}\n".format(self._src["normw"])
+            sout += "    DECs         : {}\n".format(self._src["dec"])
+            sout += "    src. weights : {}\n".format(self._src["src_w"])
+            sout += "    det. weights : {}\n".format(self._src["dec_w"])
+            sout += "    normed w_tot : {}\n".format(self._src["norm_w"])
         sout += 67 * "-" + "\n"
 
         return sout
@@ -2185,6 +2185,10 @@ class StackingPointSourceLLH(PointSourceLLH):
 
         _src_ra = np.atleast_1d(src_ra)
         _src_dec = np.atleast_1d(src_dec)
+
+        _src_ra = self._src["ra"]
+        _src_dec = self._src["dec"]
+        _src_w = self._src["norm_w"]
 
         # reset
         self.reset()
@@ -2228,9 +2232,10 @@ class StackingPointSourceLLH(PointSourceLLH):
         # Use total dec mask to only generate as much as needed.
         _ra = self.exp["ra"]
         if scramble and not self.fix:
+            # Init with -1
             _ra = np.zeros_like(self.exp["sinDec"]) - 1.
             _ra[exp_mask] = self.random.uniform(0., 2. * np.pi,
-                size=np.sum(exp_mask))
+                                                size=np.sum(exp_mask))
 
         # Selection in rightascension
         if self.mode == "box":
@@ -2266,7 +2271,7 @@ class StackingPointSourceLLH(PointSourceLLH):
             self._N += len(inject)
 
         # Calculate signal term for remaining events
-        self._ev_S = self.llh_model.signal(src_ra, src_dec, src_w, self._ev)
+        self._ev_S = self.llh_model.signal(_src_ra, _src_dec, _src_w, self._ev)
 
         # Do not further use events with signal values below threshold
         ev_mask = self._ev_S > self.thresh_S
@@ -2301,10 +2306,10 @@ class StackingPointSourceLLH(PointSourceLLH):
         """
         self.reset()
 
-        # make sure we are using arrays
-        src_ra = np.array(src_ra, ndmin=1)
-        src_dec = np.array(src_dec, ndmin=1)
-        src_w = np.array(src_w, ndmin=1)
+        # make sure we are using 1D arrays
+        src_ra = np.atleast_1d(src_ra)
+        src_dec = np.atleast_1d(src_dec)
+        src_w = np.atleast_1d(src_w)
 
         # Check if coordinates are valid equatorial coordinates in radians
         if np.any(src_ra < 0) or np.any(src_ra > 2 * np.pi):
@@ -2316,6 +2321,8 @@ class StackingPointSourceLLH(PointSourceLLH):
         if np.any(src_w <= 0):
             raise ValueError("Invalid source weight(s) <= 0 detected.")
         # End of sanity checks
+
+        self._nsrcs = len(src_ra)
 
         # Get src detector weight from BG spline -> Detector exposition
         #   for every src position. Background expects recarray with field
@@ -2329,15 +2336,14 @@ class StackingPointSourceLLH(PointSourceLLH):
         src_norm_w = src_norm_w / np.sum(src_norm_w)
 
         # Save as a recarray class variable
-        self._nsrcs = len(src_ra)
-        self._srcs = np.empty((self._nsrcs, ), dtype=[
+        self._src = np.empty((self._nsrcs, ), dtype=[
             ("ra", np.float), ("dec", np.float),
             ("src_w", np.float), ("dec_w", np.float), ("norm_w", np.float)])
-        self._srcs["ra"] = src_ra
-        self._srcs["dec"] = src_dec
-        self._srcs["src_w"] = src_w
-        self._srcs["dec_w"] = src_dec_w
-        self._srcs["norm_w"] = src_norm_w
+        self._src["ra"] = src_ra
+        self._src["dec"] = src_dec
+        self._src["src_w"] = src_w
+        self._src["dec_w"] = src_dec_w
+        self._src["norm_w"] = src_norm_w
 
         return
 
