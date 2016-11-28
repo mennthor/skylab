@@ -99,13 +99,6 @@ _thresh_S = 0.
 _ub_perc = 1.
 _win_points = 50
 
-##############################################################################
-# HealpyLLH variable defaults
-_src = None
-_nsrcs = 0
-_ev_ind = np.nan
-##############################################################################
-
 
 class PointSourceLLH(object):
     r"""Basic Point Source Likelihood class
