@@ -47,10 +47,9 @@ from . import set_pars
 from .utils import rotate
 
 ############################################################################
-# HealpyLLH extra imports
+# StackingPointSourceLLH
 import healpy as hp
-# My analysis tools
-import anapymods.healpy as amp_hp
+import anapymods.healpy as amp_hp  # My analysis tools
 ############################################################################
 
 
@@ -609,7 +608,7 @@ class ModelInjector(PointSourceInjector):
 
 
 ############################################################################
-## StackingPointSourceLLH
+# StackingPointSourceLLH
 ############################################################################
 class StackingPointSourceInjector(PointSourceInjector):
     _src_dec = np.nan
@@ -623,133 +622,87 @@ class StackingPointSourceInjector(PointSourceInjector):
     _random = np.random.RandomState()
     _seed = None
 
+    _srcs = None
+    _src_priors = None
+    _nsrcs = 0
 
     @property
-    def sinDec_range(self):
-        return self._sinDec_range
+    def srcs(self):
+        return self._srcs
 
-    @sinDec_range.setter
-    def sinDec_range(self, val):
-        if len(val) != 2:
-            raise ValueError("SinDec range needs only upper and lower bound!")
-        if val[0] < -1 or val[1] > 1:
-            logger.warn("SinDec bounds out of [-1, 1], clip to that values")
-            val[0] = max(val[0], -1)
-            val[1] = min(val[1], 1)
-        if np.diff(val) <= 0:
-            raise ValueError("SinDec range has to be increasing")
-        self._sinDec_range = [float(val[0]), float(val[1])]
-        return
+    @srcs.setter
+    def srcs(self, vals):
+        try:
+            src_ra, src_dec, src_w = vals
+        except:
+            raise ValueError("Need src, dec, ra and weights.")
+        # Make sure we are using 1D arrays
+        src_ra = np.atleast_1d(src_ra)
+        src_dec = np.atleast_1d(src_dec)
+        src_w = np.atleast_1d(src_w)
 
-    @property
-    def e_range(self):
-        return self._e_range
+        # Check if coordinates are valid equatorial coordinates in radians
+        if np.any(src_ra < 0) or np.any(src_ra > 2 * np.pi):
+            raise ValueError("RA value(s) not valid equatorial coordinates")
+        if (np.any(src_dec < -np.pi / 2.) or np.any(src_dec > +np.pi / 2.)):
+            raise ValueError("DEC value(s) not valid equatorial coordinates")
 
-    @e_range.setter
-    def e_range(self, val):
-        if len(val) != 2:
-            raise ValueError("Energy range needs upper and lower bound!")
-        if val[0] < 0. or val[1] < 0:
-            logger.warn("Energy range has to be non-negative")
-            val[0] = max(val[0], 0)
-            val[1] = max(val[1], 0)
-        if np.diff(val) <= 0:
-            raise ValueError("Energy range has to be increasing")
-        self._e_range = [float(val[0]), float(val[1])]
-        return
+        # Declinations must be in sinDec_range
+        if not (np.all(np.sin(src_dec) > self.sinDec_range[0]) and
+                np.all(np.sin(src_dec) < self.sinDec_range[1])):
+            raise ValueError("Given src declination(s) not in sinDec_range.")
 
-    @property
-    def GeV(self):
-        return self._GeV
+        # Zero or smaller weights make no sense
+        if np.any(src_w <= 0):
+            raise ValueError("Invalid source weight(s) <= 0 detected.")
+        # End of sanity checks
 
-    @GeV.setter
-    def GeV(self, value):
-        self._GeV = float(value)
+        self._nsrcs = len(src_ra)
+        # Weights must be normalized
+        src_w = src_w / np.sum(src_w)
 
-        return
+        # Save as a recarray class variable
+        self._srcs = np.empty((self._nsrcs, ), dtype=[
+            ("ra", np.float), ("dec", np.float), ("norm_w", np.float)])
+        self._srcs["ra"] = src_ra
+        self._srcs["dec"] = src_dec
+        self._srcs["norm_w"] = src_w
 
-    @property
-    def E0(self):
-        return self._E0
-
-    @E0.setter
-    def E0(self, value):
-        self._E0 = float(value)
-
-        return
-
-    @property
-    def random(self):
-        return self._random
-
-    @random.setter
-    def random(self, value):
-        self._random = value
-
-        return
-
-    @property
-    def seed(self):
-        return self._seed
-
-    @seed.setter
-    def seed(self, val):
-        logger.info("Setting global seed to {0:d}".format(int(val)))
-        self._seed = int(val)
-        self.random = np.random.RandomState(self.seed)
-
-        return
-
-    @property
-    def sinDec_bandwidth(self):
-        return self._sinDec_bandwidth
-
-    @sinDec_bandwidth.setter
-    def sinDec_bandwidth(self, val):
-        if val < 0. or val > 1:
-            logger.warn("Sin Declination bandwidth {0:2e} not valid".format(
-                            val))
-            val = min(1., np.fabs(val))
-        self._sinDec_bandwidth = float(val)
-
+        # Call setup to calc solid angle for every source
         self._setup()
 
         return
 
     @property
-    def src_dec(self):
-        return self._src_dec
+    def src_priors(self):
+        return self._src_priors
 
-    @src_dec.setter
-    def src_dec(self, val):
-        if not np.fabs(val) < np.pi / 2.:
-            logger.warn("Source declination {0:2e} not in pi range".format(
-                            val))
-            return
-        if not (np.sin(val) > self.sinDec_range[0]
-                and np.sin(val) < self.sinDec_range[1]):
-            logger.error("Injection declination not in sinDec_range!")
-        self._src_dec = float(val)
-
-        self._setup()
-
+    @src_priors.setter
+    def src_priors(self, maps):
+        # Check that prior healpy maps are valid
+        if maps is not None:
+            # Priors are arrays of map arrays
+            _maps = np.atleast_2d(maps)
+            if not hp.maptype(_maps) == len(self.srcs):
+                raise ValueError("Healpy map priors must match number of" +
+                                 " sources, which must be given first.")
+            else:
+                self._src_priors = _maps
         return
 
     def _setup(self):
-        r"""If one of *src_dec* or *dec_bandwidth* is changed or set, solid
-        angles and declination bands have to be re-set.
-
         """
-
+        This is vectorized and works for multiple src decs.
+        """
         A, B = self._sinDec_range
 
         m = (A - B + 2. * self.sinDec_bandwidth) / (A - B)
         b = self.sinDec_bandwidth * (A + B) / (B - A)
 
-        sinDec = m * np.sin(self.src_dec) + b
+        sinDec = m * np.sin(self.srcs["dec"]) + b
 
-        min_sinDec = max(A, sinDec - self.sinDec_bandwidth)
-        max_sinDec = min(B, sinDec + self.sinDec_bandwidth)
+        min_sinDec = np.maximum(A, sinDec - self.sinDec_bandwidth)
+        max_sinDec = np.minimum(B, sinDec + self.sinDec_bandwidth)
 
         self._min_dec = np.arcsin(min_sinDec)
         self._max_dec = np.arcsin(max_sinDec)
