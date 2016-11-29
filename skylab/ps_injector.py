@@ -609,31 +609,12 @@ class ModelInjector(PointSourceInjector):
 
 
 ############################################################################
-## HealpyLLH
+## StackingPointSourceLLH
 ############################################################################
-class HealpyInjector(PointSourceInjector):
-    r"""
-    Injector for injecting events from healpy spatial pdf maps.
-
-    Not using `src_dec` because source positions are given by the healpy map.
-    For the same reason, `sinDec_bandwidth` is always the whole sky. Events
-    get simply sampled according to the src_map, no need to restrcit that.
-
-    Also `sinDec_bandwidth` has a slightly different purpose.
-
-    Parameters
-    ----------
-    sinDec_bandwidth : float array
-        sinDec_range[0] is the lower and sinDec_range[1] bound in sinDec in
-        which MC events are select for injection.
-        Make sure, that this span all the src position, otherwise
-    """
-    _src = None
+class StackingPointSourceInjector(PointSourceInjector):
+    _src_dec = np.nan
     _sinDec_bandwidth = 0.1
-
-    # Those are constant here becasue we sample from src maps directly
-    _sinDec_range = [-1., +1.]
-    _omega = 4. * np.pi
+    _sinDec_range = [-1., 1.]
 
     _E0 = 1.
     _GeV = 1.e3
@@ -642,71 +623,97 @@ class HealpyInjector(PointSourceInjector):
     _random = np.random.RandomState()
     _seed = None
 
-    def __init__(self, src_map, **kwargs):
-        """
-        Set src_map array as a calss attribute so we can use it for the
-        `sample()` function.
 
-        Parameters
-        ----------
-        src_map : valid healpy map
-            The full source all sky spatial pdf map. Can be constructed by
-            adding all map per source according to their weights. Then we
-            get a single map containing the all sky spatial pdf.
-
-        Other Parameters
-        ----------------
-        sinDec_bandwidth : float
-            Gives the declination band in sin(dec) from which MC events are
-            selected in  `sample()` function around a drawn source location.
-            If small, only events from nearly the same declination as a
-            selected source position are injected. The larger, the more
-            distant events gets rotated to the soource locatiuon and injected.
-            Needs to be set, so that injected events are still representative
-            in the declination band.
-        """
-        self.src_map = src_map
-
-        self.sinDec_bandwidth = kwargs.pop(
-            "sinDec_bandwidth", self._sinDec_bandwidth)
-
-        # Those are fixed in this class and get set once here, because we
-        # always sample on the whole sky (4pi)
-        self._min_sinDec = self._sinDec_range[0]
-        self._max_sinDec = self._sinDec_range[1]
-        self._min_dec = np.arcsin(self._min_sinDec)
-        self._max_dec = np.arcsin(self._max_sinDec)
-        self._omega = 2. * np.pi * (self._max_sinDec - self._min_sinDec)
-
-        super(HealpyInjector, self).__init__(**kwargs)
-        return
-
-    def __str__(self):
-        r"""
-        String representation showing some more or less useful information
-        regarding the Injector class.
-        Removed `src_dec` as it is not needed here.
-        """
-        sout = ("\n{:s}\n" +
-                67 * "-" + "\n" +
-                "\tSpectral index     : {:6.2f}\n" +
-                "\tsinDec bandwidth   : {:5.1f}°\n"
-                "\tlog10 Energy range : {:5.1f} to {:5.1f}\n").format(
-                    self.__repr__(), self.gamma,
-                    np.rad2deg(np.arcsin(self.sinDec_bandwidth)),
-                    *self.e_range)
-        sout += 67 * "-"
-        return sout
-
-    # PROPERTIES
-    # Overwrite some unused setters
     @property
     def sinDec_range(self):
         return self._sinDec_range
 
     @sinDec_range.setter
     def sinDec_range(self, val):
-        print("sinDec_range is always [-1,+1] in HealpyInjector. Skipping.")
+        if len(val) != 2:
+            raise ValueError("SinDec range needs only upper and lower bound!")
+        if val[0] < -1 or val[1] > 1:
+            logger.warn("SinDec bounds out of [-1, 1], clip to that values")
+            val[0] = max(val[0], -1)
+            val[1] = min(val[1], 1)
+        if np.diff(val) <= 0:
+            raise ValueError("SinDec range has to be increasing")
+        self._sinDec_range = [float(val[0]), float(val[1])]
+        return
+
+    @property
+    def e_range(self):
+        return self._e_range
+
+    @e_range.setter
+    def e_range(self, val):
+        if len(val) != 2:
+            raise ValueError("Energy range needs upper and lower bound!")
+        if val[0] < 0. or val[1] < 0:
+            logger.warn("Energy range has to be non-negative")
+            val[0] = max(val[0], 0)
+            val[1] = max(val[1], 0)
+        if np.diff(val) <= 0:
+            raise ValueError("Energy range has to be increasing")
+        self._e_range = [float(val[0]), float(val[1])]
+        return
+
+    @property
+    def GeV(self):
+        return self._GeV
+
+    @GeV.setter
+    def GeV(self, value):
+        self._GeV = float(value)
+
+        return
+
+    @property
+    def E0(self):
+        return self._E0
+
+    @E0.setter
+    def E0(self, value):
+        self._E0 = float(value)
+
+        return
+
+    @property
+    def random(self):
+        return self._random
+
+    @random.setter
+    def random(self, value):
+        self._random = value
+
+        return
+
+    @property
+    def seed(self):
+        return self._seed
+
+    @seed.setter
+    def seed(self, val):
+        logger.info("Setting global seed to {0:d}".format(int(val)))
+        self._seed = int(val)
+        self.random = np.random.RandomState(self.seed)
+
+        return
+
+    @property
+    def sinDec_bandwidth(self):
+        return self._sinDec_bandwidth
+
+    @sinDec_bandwidth.setter
+    def sinDec_bandwidth(self, val):
+        if val < 0. or val > 1:
+            logger.warn("Sin Declination bandwidth {0:2e} not valid".format(
+                            val))
+            val = min(1., np.fabs(val))
+        self._sinDec_bandwidth = float(val)
+
+        self._setup()
+
         return
 
     @property
@@ -715,202 +722,215 @@ class HealpyInjector(PointSourceInjector):
 
     @src_dec.setter
     def src_dec(self, val):
-        print("src_dec is not used in HealpyInjector; skipping.")
-        return
-
-    # Remove calling _setup() from sinDec_bandwidth setter. _omega stays 4pi
-    @property
-    def sinDec_bandwidth(self):
-        return self._sinDec_bandwidth
-
-    @sinDec_bandwidth.setter
-    def sinDec_bandwidth(self, val):
-        if val < 0. or val > 1.:
-            print("sinDec_bandwidth must be in [0, 1]; skipping.")
+        if not np.fabs(val) < np.pi / 2.:
+            logger.warn("Source declination {0:2e} not in pi range".format(
+                            val))
             return
-        self._sinDec_bandwidth = float(val)
-        self._dec_bandwidth = np.arcsin(self._sinDec_bandwidth)
+        if not (np.sin(val) > self.sinDec_range[0]
+                and np.sin(val) < self.sinDec_range[1]):
+            logger.error("Injection declination not in sinDec_range!")
+        self._src_dec = float(val)
+
+        self._setup()
+
         return
 
-    # The source recarray must be a class attribute to stay consistent with
-    # the `fill()` function call
-    @property
-    def src_map(self):
-        return self._src_map
+    def _setup(self):
+        r"""If one of *src_dec* or *dec_bandwidth* is changed or set, solid
+        angles and declination bands have to be re-set.
 
-    @src_map.setter
-    def src_map(self, src_map):
-        if hp.maptype(src_map) != 0:
-            raise ValueError(
-                "Given src_map is not a single, valid healpy map.")
-        self._src_map = src_map
+        """
+
+        A, B = self._sinDec_range
+
+        m = (A - B + 2. * self.sinDec_bandwidth) / (A - B)
+        b = self.sinDec_bandwidth * (A + B) / (B - A)
+
+        sinDec = m * np.sin(self.src_dec) + b
+
+        min_sinDec = max(A, sinDec - self.sinDec_bandwidth)
+        max_sinDec = min(B, sinDec + self.sinDec_bandwidth)
+
+        self._min_dec = np.arcsin(min_sinDec)
+        self._max_dec = np.arcsin(max_sinDec)
+
+        # solid angle of selected events
+        self._omega = 2. * np.pi * (max_sinDec - min_sinDec)
+
         return
 
-    # PUBLIC METHODS
+    def _weights(self):
+        r"""Setup weights for given models.
+
+        """
+        # weights given in days, weighted to the point source flux
+        self.mc_arr["ow"] *= self.mc_arr["trueE"]**(-self.gamma) / self._omega
+
+        self._raw_flux = np.sum(self.mc_arr["ow"], dtype=np.float)
+
+        # normalized weights for probability
+        self._norm_w = self.mc_arr["ow"] / self._raw_flux
+
+        # double-check if no weight is dominating the sample
+        if self._norm_w.max() > 0.1:
+            logger.warn("Warning: Maximal weight exceeds 10%: {0:7.2%}".format(
+                            self._norm_w.max()))
+
+        return
+
     def fill(self, src_dec, mc, livetime):
-        r"""
-        Fill the Injector with MonteCarlo events by sampling event positions
-        from the spatial source map. Those positions are assigned to MC events
-        in the same declination band as the sampled event corresponding to
-        the events weight.
-
-        Only slightly adapted to not use 'src_dec' and added dec'
-        information to mc_arr, to use it in sample().
-
-        If multiple samples are given the dictionary must have the structure
-        `{key1:sample1, key2:sample2}` where keys are integers and samples are
-        record arrays. The same applies to livetimes: `{key1:livetime1, ...}`.
-        If only one sample is given as a record array it is internally
-        converted to a dictionary with `{-1 : mc}` and `{-1 : livetime}`.
-
-        `src_dec` is kept as a dummy argument for compatibility but has
-        no effect.
+        r"""Fill the Injector with MonteCarlo events selecting events around
+        the source position(s).
 
         Parameters
         -----------
-        mc : record array or dict of record arrays
-            Monte Carlo event sample or multiple samples.
-            Must be the same as the MC used in psLLH to cache the maps.
-        livetime : float or dict of floats
-            Livetime of the MC sample or mutliple samples.
+        src_dec : float, array-like
+            Source location(s)
+        mc : recarray, dict of recarrays with sample enum as key (MultiPointSourceLLH)
+            Monte Carlo events
+        livetime : float, dict of floats
+            Livetime per sample
+
         """
-        # First use the super class to setup self.mc_arr and self.mc
-        super(HealpyInjector, self).fill(
-            src_dec=np.nan, mc=mc, livetime=livetime)
 
-        # Now add 'dec' information to self.mc_arr to use it in `sample()`
-        self.mc_arr = np.lib.recfunctions.append_fields(
-            self.mc_arr, "dec", np.zeros(len(self.mc_arr), dtype=np.float),
-            dtypes=np.float, usemask=False)
+        if isinstance(mc, dict) ^ isinstance(livetime, dict):
+            raise ValueError("mc and livetime not compatible")
 
-        # Loop over all MC samples in self.mc dict
-        enums = np.unique(self.mc_arr["enum"])
-        for enum in enums:
-            # Select single sample
-            mask = (self.mc_arr["enum"] == enum)
-            # Select all valid ids already stored in self.mc_arr
-            idx = self.mc_arr[mask]["idx"]
-            # Fetch 'dec' from self.mc and add to self.mc_arr
-            self.mc_arr[mask][idx]["dec"] = np.copy(self.mc[enum][idx]["dec"])
+        self.src_dec = src_dec
 
-            sout = (67 * "-" + "\nFill HealpyInjector info:"
-                    " Sample {:s}: Selected {:6d} events\n"
-                    "    DEC : {:7.2f}° - {:7.2f}°\n"
-                    "    E   : {:7.2f} and {:7.2f} in {:7.2f} GeV").format(
-                        str(enum), len(idx),
-                        np.rad2deg(self._min_dec), np.rad2deg(self._max_dec),
-                        self.e_range[0], self.e_range[1], self.GeV)
-            print(sout)
+        self.mc = dict()
+        self.mc_arr = np.empty(0, dtype=[("idx", np.int), ("enum", np.int),
+                                         ("trueE", np.float), ("ow", np.float)])
+
+        if not isinstance(mc, dict):
+            mc = {-1: mc}
+            livetime = {-1: livetime}
+
+        for key, mc_i in mc.iteritems():
+            # get MC event's in the selected energy and sinDec range
+            band_mask = ((np.sin(mc_i["trueDec"]) > np.sin(self._min_dec))
+                         &(np.sin(mc_i["trueDec"]) < np.sin(self._max_dec)))
+            band_mask &= ((mc_i["trueE"] / self.GeV > self.e_range[0])
+                          &(mc_i["trueE"] / self.GeV < self.e_range[1]))
+
+            if not np.any(band_mask):
+                print("Sample {0:d}: No events were selected!".format(key))
+                self.mc[key] = mc_i[band_mask]
+
+                continue
+
+            self.mc[key] = mc_i[band_mask]
+
+            N = np.count_nonzero(band_mask)
+            mc_arr = np.empty(N, dtype=self.mc_arr.dtype)
+            mc_arr["idx"] = np.arange(N)
+            mc_arr["enum"] = key * np.ones(N)
+            mc_arr["ow"] = self.mc[key]["ow"] * livetime[key] * 86400.
+            mc_arr["trueE"] = self.mc[key]["trueE"]
+
+            self.mc_arr = np.append(self.mc_arr, mc_arr)
+
+            print("Sample {0:s}: Selected {1:6d} events at {2:7.2f}deg".format(
+                        str(key), N, np.degrees(self.src_dec)))
+
+        if len(self.mc_arr) < 1:
+            raise ValueError("Select no events at all")
+
+        print("Selected {0:d} events in total".format(len(self.mc_arr)))
+
+        self._weights()
 
         return
 
+    def flux2mu(self, flux):
+        r"""Convert a flux to mean number of expected events.
+
+        Converts a flux :math:`\Phi_0` to the mean number of expected
+        events using the spectral index :math:`\gamma`, the
+        specified energy unit `x GeV` and the point of normalization `E0`.
+
+        The flux is calculated as follows:
+
+        .. math::
+
+            \frac{d\Phi}{dE}=\Phi_0\,E_0^{2-\gamma}
+                                \left(\frac{E}{E_0}\right)^{-\gamma}
+
+        In this way, the flux will be equivalent to a power law with
+        index of -2 at the normalization energy `E0`.
+
+        """
+
+        gev_flux = (flux
+                        * (self.E0 * self.GeV)**(self.gamma - 1.)
+                        * (self.E0)**(self.gamma - 2.))
+
+        return self._raw_flux * gev_flux
+
+    def mu2flux(self, mu):
+        r"""Calculate the corresponding flux in [*GeV*^(gamma - 1) s^-1 cm^-2]
+        for a given number of mean source events.
+
+        """
+
+        gev_flux = mu / self._raw_flux
+
+        return (gev_flux
+                    * self.GeV**(1. - self.gamma) # turn from I3Unit to *GeV*
+                    * self.E0**(2. - self.gamma)) # go from 1*GeV* to E0
+
     def sample(self, src_ra, mean_mu, poisson=True):
-        r"""
-        Inject mean_mu (more below) events using rejection sampling from
-        the healpy src_map.
-
-        Events from MC are selected from the same declination band as the
-        sampled position because the detector acceptance is declination
-        dependent and only events from the same declination band are
-        representative for an event position at the same declination.
-
-        `src_ra` is kept as a dummy argument for compatibility but has
-        no effect.
+        r""" Generator to get sampled events for a Point Source location.
 
         Parameters
-        ----------
+        -----------
         mean_mu : float
             Mean number of events to sample
-        poisson : bool
-            Use poisson fluctuations, otherwise sample exactly *mean_mu*.
-            (default: True)
 
         Returns
         --------
         num : int
             Number of events
         sam_ev : iterator
-            Sampled events for each loop iteration, either as simple array or
-            as dictionary for each sample, having the same fields as exp.
+            sampled_events for each loop iteration, either as simple array or
+            as dictionary for each sample
+
+        Optional Parameters
+        --------------------
+        poisson : bool
+            Use poisson fluctuations, otherwise sample exactly *mean_mu*
+
         """
-        def assign_and_drop(sam_ev, inj_ra, inj_dec):
-            r"""
-            Assign sampled ra/dec positions and drop mc fields from
-            injected sample. This replaces the rotate function in the
-            PointSourceInjector class.
-            """
-            # Assign sampled locations from src map.
-            sam_ev["ra"] = inj_ra
-            sam_ev["dec"] = inj_dec
-            # Drop MC fields from the injected events
-            mc_names = ['ow', 'trueDec', 'trueE', 'trueRa']
-            return drop_fields(sam_ev, mc_names)
 
-        # Here starts the generator part
+        # generate event numbers using poissonian events
         while True:
-            # Sample mu_mean directly or get n_inj from a poisson distribution
-            # if poisson = True was given
-            n_inj = (self.random.poisson(mean_mu)
-                     if poisson else int(np.around(mean_mu)))
+            num = (self.random.poisson(mean_mu)
+                        if poisson else int(np.around(mean_mu)))
 
-            # If no events should be sampled, return nothing
-            if n_inj < 1:
-                yield n_inj, None
+            logger.debug(("Generated number of sources: {0:3d} "+
+                          "of mean {1:5.1f} sources").format(num, mean_mu))
+
+            # if no events should be sampled, return nothing
+            if num < 1:
+                yield num, None
                 continue
 
-            # Otherwise sample pixel indices from combined soruce map
-            inj_ind, _ = amp_hp.healpy_rejection_sampler(
-                self.src_map, n=n_inj)
+            sam_idx = self.random.choice(self.mc_arr, size=num, p=self._norm_w)
 
-            # Assign indices to healpy map coordinates
-            NSIDE = hp.get_nside(self.src_map)
-            inj_th, inj_phi = hp.pix2ang(NSIDE, inj_ind)
-
-            # Get equatorial coordinates for the injected signal
-            inj_dec, inj_ra = amp_hp.ThetaPhiToDecRa(inj_th, inj_phi)
-
-            # Temporary recarray to hold the sampled mc_arr events
-            sam_idx = np.empty((n_inj,), dtype=self.mc_arr.dtype)
-
-            # Loop over injected evts, select MC evt from all given samples
-            # and fill it into inj.
-            for i, (_dec, ra) in enumerate(zip(inj_dec, inj_ra)):
-                # First get the zenith band per event with correct boundaries
-                # This is from psLLH _select_events()
-                dec = (np.pi - 2. * self._dec_bandwidth) / np.pi * _dec
-                min_dec = max(-np.pi / 2., dec - self._dec_bandwidth)
-                max_dec = min(+np.pi / 2., dec + self._dec_bandwidth)
-
-                # Pick a random event from the MC data in the dec band.
-                # Events are weighted using the _norm_w set up in _weight()
-                mask = np.logical_and(
-                    self.mc_arr["dec"] > min_dec, self.mc_arr["dec"] < max_dec)
-
-                # Choose one event from mc_arr per sampled location
-                sam_idx[i] = np.random.choice(
-                    self.mc_arr, size=1, p=self._norm_w)
-
-            # When we use multiple samples, store injected events from each
-            # given sample seperately
+            # get the events that were sampled
             enums = np.unique(sam_idx["enum"])
 
-            # Case if only one rec array (single sample) was given in fill()
             if len(enums) == 1 and enums[0] < 0:
-                # Only one sample, just return recarray
+                # only one sample, just return recarray
                 sam_ev = np.copy(self.mc[enums[0]][sam_idx["idx"]])
-                # Assign sampled ra/dec to single output array
-                yield n_inj, assign_and_drop(sam_ev, inj_ra, inj_dec)
+
+                yield num, rotate_struct(sam_ev, src_ra, self.src_dec)
                 continue
 
-            # For multiple samples return each injected event in a dict
-            # indicating from which original sample it came
             sam_ev = dict()
             for enum in enums:
-                mask = (sam_idx["enum"] == enum)
-                idx = sam_idx[mask]["idx"]
+                idx = sam_idx[sam_idx["enum"] == enum]["idx"]
                 sam_ev_i = np.copy(self.mc[enum][idx])
-                # Assign sampled ra/dec to each out array
-                sam_ev[enum] = assign_and_drop(
-                    sam_ev_i, inj_ra[mask], inj_dec[mask])
+                sam_ev[enum] = rotate_struct(sam_ev_i, src_ra, self.src_dec)
 
-            yield n_inj, sam_ev
+            yield num, sam_ev
