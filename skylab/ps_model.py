@@ -885,6 +885,34 @@ class EnergyLLHfixed(EnergyLLH):
 # StackingPointSourceLLH
 ############################################################################
 class StackingPointSourceLLH(ClassicLLH):
+    _gamma_bins = np.linspace(1., 5., 55 + 1)
+
+    def __call__(self, exp, mc, livetime):
+        # Create sinDec vs gamma spline on MC to get detector source weights
+        # for a source with spectral index gamma
+        gamma_binmids = 0.5 * (self._gamma_bins[:-1] + self._gamma_bins[1:])
+
+        x = np.repeat(np.sin(mc["trueDec"]), len(gamma_binmids))
+        y = np.tile(gamma_binmids, len(self._mc["trueDec"]))
+        w = (np.repeat(self._mc["ow"], len(self._gamma_binmids))
+             * (np.repeat(self._mc["trueE"], len(self._gamma_binmids)))**(-y) )
+        #/ np.repeat(np.cos(self._mc["trueDec"]), len(self._gamma_binmids))
+        nuhist = dict()
+        nuhist["weight"], _, _ = np.histogram2d(x, y, weights=w,
+                                                  bins=(self._stack_sindec_bins,
+                                                        self._gamma_bins))
+
+
+        spline = scipy.interpolate.RectBivariateSpline(self._sindec_binmids1 ,self._gamma_binmids, nuhist["weight"], kx=2, ky=2)
+
+        super(StackingPointSourceLLH, self).__call__(
+            exp, mc, livetime, **par_grid)
+
+        return
+
+    def _src_weight(self, src_ra, src_dec):
+        return
+
     def signal(self, src_ra, src_dec, src_norm_w, ev):
         # Create Signal for every src position
         S = np.zeros((len(src_ra), len(ev)), dtype=np.float)
