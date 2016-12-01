@@ -60,7 +60,7 @@ _2dim_bins = 25
 _ratio_perc = 99.
 _1dim_order = 2
 _2dim_order = 2
-_precision = 0.1
+_precision = 0.05
 _par_val = np.nan
 _parab_cache = np.zeros((0, ), dtype=[("S1", np.float), ("a", np.float),
                                       ("b", np.float)])
@@ -471,6 +471,7 @@ class WeightLLH(ClassicLLH):
 
         self._setup(exp)
 
+
         # calclate splines for all values of splines
         par_grid = dict()
         for par, val in self.params.iteritems():
@@ -583,6 +584,7 @@ class WeightLLH(ClassicLLH):
         mcvars = [mc[p] if not p == "sinDec" else np.sin(mc["trueDec"])
                   for p in self.hist_pars]
 
+
         # create MC histogram
         wSh, wSb = self._hist(mcvars, weights=self._get_weights(mc, **params))
         wSh = kernel_func(wSh, self._XX)
@@ -612,6 +614,7 @@ class WeightLLH(ClassicLLH):
         self._w_spline_dict[tuple(params.items())] = spline
 
         return spline
+
 
     def _setup(self, exp):
         r"""Set up everything for weight calculation.
