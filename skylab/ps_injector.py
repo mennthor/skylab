@@ -660,9 +660,10 @@ class StackingPointSourceInjector(PointSourceInjector):
             band_mask &= ((mc_i["trueE"] / self.GeV > self.e_range[0])
                           &(mc_i["trueE"] / self.GeV < self.e_range[1]))
 
+
             if not np.any(band_mask):
                 print("Sample {0:d}: No events were selected!".format(key))
-                self.mc[key] = mc_i[band_mask]
+                self.mc[key] = mc_i[band_mask.any(axis=0)]
 
                 continue
 

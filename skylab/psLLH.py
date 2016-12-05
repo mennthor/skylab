@@ -1160,7 +1160,7 @@ class PointSourceLLH(object):
 
             fun, grad = self.llh(**fit_pars)
 
-            print(x,-fun, -grad)
+            #print(x,-fun, -grad)
 
             # return negative value needed for minimization
             return -fun, -grad
@@ -1561,9 +1561,9 @@ class PointSourceLLH(object):
         TS = list()
         mu_flux = list()
         flux = list()
-        trials = np.empty((0, ), dtype=[("n_inj", np.int), ("TS", np.float)]
+        trials = kwargs.pop('trials', np.empty((0, ), dtype=[("n_inj", np.int), ("TS", np.float)]
                                        + [(par, np.float)
-                                          for par in self.params])
+                                          for par in self.params]))
 
         for i, (TSval_i, alpha_i, beta_i) in enumerate(zip(TSval, alpha, beta)):
 
@@ -2401,8 +2401,130 @@ class StackingPointSourceLLH(PointSourceLLH):
 
         return LogLambda, grad
 
-
     
+    def weighted_sensitivity(self, src_ra, src_dec, alpha, beta, inj, mc, **kwargs):
+        """Calculate the point source sensitivity for a given source
+        hypothesis using weights.
+
+        All trials calculated are used at each step and weighted using the
+        Poissonian probability. Credits for this idea goes to Asen Christov of
+        IceCube in Geneva.
+
+        Parameters
+        ----------
+        src_ra : float
+            Source position(s)
+        src_dec : float
+            Source position(s)
+        alpha : array-like (m, )
+            Error of first kind
+        beta : array-like (m, )
+            Error of second kind
+        inj : skylab.BaseInjector instance
+            Injection module
+        mc : numpy-recarray
+            Monte Carlo to use for injection. Needs all fields that
+            is stored in experimental data, plus true information that the
+            injector uses: trueRa, trueDec, trueE, ow
+
+        Returns
+        -------
+        dict containting the following keys
+
+        flux : array-like (m, )
+            Flux needed to reach sensitivity of *alpha*, *beta*
+        mu : array-like (m, )
+            Number of injected events corresponding to flux.
+        TSval : array-like (m, )
+            TS value at value of alpha for background
+        weights : array-like (m, n)
+            Weights for all n trials corresponding to m mu values.
+        trials : recarray (n, )
+            Array containing all information about trial of each fit
+
+        Optional Parameters
+        --------------------
+        n_bckg : int
+            Number of background trials to do if needed
+        n_iter : int
+            Number of trials per iteration
+        fit : None, callable or str
+            If str, function value to fit to background, possible values are
+            one of ["chi2", "exp"]
+        fit_kw : dict
+            Arguments to pass to the fitting of the background distribution.
+        TSval : array-like (m, )
+            TS value to use for calculation, skips background fitting, and
+            alpha obsolete.
+        eps : float
+            Precision for breaking point.
+        trials: structured array
+            Including TS, n_inj ... of different trials
+
+        """
+
+
+        fit = kwargs.get("fit", None)
+        trials = kwargs.pop('trials', None)
+
+        if trials is not None:
+            typ = np.empty((0, ), dtype=[("n_inj", np.int), ("TS", np.float)]
+                                       + [(par, np.float)
+                                           for par in self.params]).dtype
+            if not trials.dtype == typ:
+                raise ValueError("Trials must be of type {0:s}".format(typ))
+
+
+            # all input values as lists
+            alpha = np.atleast_1d(alpha)
+            beta = np.atleast_1d(beta)
+            TSval = np.atleast_1d(kwargs.pop("TSval", [None for i in alpha]))
+            if not (len(alpha) == len(beta) == len(TSval)):
+                raise ValueError("alpha, beta, and (if given) TSval must have "
+                             " same length!")
+
+            for i, (TSval_i, alpha_i, beta_i) in enumerate(zip(TSval, alpha, beta)):
+
+                if TSval_i is None:
+                    # Need to calculate TS value for given alpha values
+                    if fit == None:
+                        # No parametrization of background given, do scrambles
+                        print("\tUse {0:7d} background scrambles for estimation of "
+                            "TS value for alpha = {1:7.2%}".format(len(trials),alpha_i))
+
+                    print("Fit background function to scrambles")
+                    if self.nsource_bounds[0] < 0:
+                        print("Fit two sided chi2 to background scrambles")
+                        fitfun = utils.twoside_chi2
+                    else:
+                        print("Fit delta chi2 to background scrambles")
+                        fitfun = utils.delta_chi2
+                    fit = fitfun(trials["TS"][trials["n_inj"] == 0], df=2.,
+                                 floc=0., fscale=1.)
+
+                    # give information about the fit
+                    print(fit)
+
+                # use fitted function to calculate needed TS-value
+                TSval[i] = np.asscalar(fit.isf(alpha_i))
+
+            kwargs.setdefault('TSval',TSval)
+            kwargs.setdefault('trials',trials)
+            result = super(StackingPointSourceLLH, self).weighted_sensitivity(src_ra, src_dec, alpha, beta, inj, mc, **kwargs)
+
+
+        else:
+            result = super(StackingPointSourceLLH, self).weighted_sensitivity(src_ra, src_dec, alpha, beta, inj, mc, **kwargs)
+
+
+
+        return result
+
+
+
+        
+
+
 
 class StackingMultiPointSourceLLH(MultiPointSourceLLH):
     r"""Class to handle multiple event samples that are distinct of each other.
@@ -2517,7 +2639,7 @@ class StackingMultiPointSourceLLH(MultiPointSourceLLH):
         return logLambda, logLambda_grad
 
 
-    def fit_sources(self, src_ra, src_dec, **kwargs):
+    def fit_source(self, src_ra, src_dec, **kwargs):
         """Minimize the negative log-Likelihood at source positions.
 
         Parameters
@@ -2581,7 +2703,7 @@ class StackingMultiPointSourceLLH(MultiPointSourceLLH):
 
         
         self.par_seeds = np.array([x1_min, x2_min])
-        fmin,xmin = self.fit_source(src_ra, src_dec, **kwargs)
+        fmin,xmin = super(StackingMultiPointSourceLLH, self).fit_source(src_ra, src_dec, **kwargs)
         
         return fmin, xmin
 
@@ -2611,6 +2733,7 @@ class StackingMultiPointSourceLLH(MultiPointSourceLLH):
             w_theo = self._w_theo
         else:
             w_theo = np.ones_like(src_dec)
+
         w_b = np.empty((len(self._enum), len(src_dec)), dtype=np.float)
         dw_b = np.zeros((len(self._enum), len(src_dec), len(self.params) - 1),
                                                   dtype=np.float)
