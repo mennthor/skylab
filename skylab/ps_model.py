@@ -885,33 +885,42 @@ class EnergyLLHfixed(EnergyLLH):
 # StackingPointSourceLLH
 ############################################################################
 class StackingPointSourceLLH(ClassicLLH):
+    sinDec_bins = _sinDec_bins
+    sinDec_range = _sinDec_range
+
+    _gamma = 2.
     _gamma_bins = np.linspace(1., 5., 55 + 1)
 
     def __call__(self, exp, mc, livetime):
+        super(StackingPointSourceLLH, self).__call__(exp, mc, livetime)
+
         # Create sinDec vs gamma spline on MC to get detector source weights
         # for a source with spectral index gamma
         gamma_binmids = 0.5 * (self._gamma_bins[:-1] + self._gamma_bins[1:])
+        self.xx, self.yy = np.meshgrid(np.sin(mc["trueDec"]), gamma_binmids)
+        self.Efac = mc["trueE"]**(-self.yy)
+        self.ow_ = np.tile(mc["ow"], len(gamma_binmids)).reshape(
+            len(gamma_binmids), len(mc))
+        self.ow = self.ow_ * self.Efac
 
-        x = np.repeat(np.sin(mc["trueDec"]), len(gamma_binmids))
-        y = np.tile(gamma_binmids, len(self._mc["trueDec"]))
-        w = (np.repeat(self._mc["ow"], len(self._gamma_binmids))
-             * (np.repeat(self._mc["trueE"], len(self._gamma_binmids)))**(-y) )
-        #/ np.repeat(np.cos(self._mc["trueDec"]), len(self._gamma_binmids))
-        nuhist = dict()
-        nuhist["weight"], _, _ = np.histogram2d(x, y, weights=w,
-                                                  bins=(self._stack_sindec_bins,
-                                                        self._gamma_bins))
+        self.nuhist, _, _ = np.histogram2d(
+            self.xx.flatten(), self.yy.flatten(),
+            weights=self.ow.flatten(),
+            bins=(self.sinDec_bins, self._gamma_bins))
 
-
-        spline = scipy.interpolate.RectBivariateSpline(self._sindec_binmids1 ,self._gamma_binmids, nuhist["weight"], kx=2, ky=2)
-
-        super(StackingPointSourceLLH, self).__call__(
-            exp, mc, livetime, **par_grid)
+        sinDec_binmids = 0.5 * (self.sinDec_bins[:-1] + self.sinDec_bins[1:])
+        self._spline = scipy.interpolate.RectBivariateSpline(
+            sinDec_binmids, gamma_binmids, self.nuhist, kx=2, ky=2)
 
         return
 
     def _src_weight(self, src_ra, src_dec):
-        return
+        """For given src_dec(s) and a single gamma calculate src weights
+        from spline"""
+        gamma_rep = np.repeat(self._gamma, len(src_dec))
+        weights = self._spline.ev(src_dec, gamma_rep)
+        weights[weights < 0.] = 0.
+        return weights
 
     def signal(self, src_ra, src_dec, src_norm_w, ev):
         # Create Signal for every src position
