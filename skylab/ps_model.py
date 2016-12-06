@@ -32,13 +32,6 @@ from scipy.stats import norm
 from . import set_pars
 from .utils import kernel_func
 
-############################################################################
-# HealpyLLH extra imports
-import healpy as hp
-# - My analysis tools
-import anapymods.healpy as amp_hp
-############################################################################
-
 
 # get module logger
 def trace(self, message, *args, **kwargs):
@@ -885,49 +878,37 @@ class EnergyLLHfixed(EnergyLLH):
 # StackingPointSourceLLH
 ############################################################################
 class StackingPointSourceLLH(ClassicLLH):
-    sinDec_bins = _sinDec_bins
-    sinDec_range = _sinDec_range
+    @property
+    def gamma(self):
+        return self._gamma
 
-    _gamma = 2.
-    _gamma_bins = np.linspace(1., 5., 55 + 1)
-
-    def __call__(self, exp, mc, livetime):
-        super(StackingPointSourceLLH, self).__call__(exp, mc, livetime)
-
-        # Create sinDec vs gamma spline on MC to get detector source weights
-        # for a source with spectral index gamma
-        gamma_binmids = 0.5 * (self._gamma_bins[:-1] + self._gamma_bins[1:])
-        self.xx, self.yy = np.meshgrid(np.sin(mc["trueDec"]), gamma_binmids)
-        self.Efac = mc["trueE"]**(-self.yy)
-        self.ow_ = np.tile(mc["ow"], len(gamma_binmids)).reshape(
-            len(gamma_binmids), len(mc))
-        self.ow = self.ow_ * self.Efac
-
-        self.nuhist, _, _ = np.histogram2d(
-            self.xx.flatten(), self.yy.flatten(),
-            weights=self.ow.flatten(),
-            bins=(self.sinDec_bins, self._gamma_bins))
-
-        sinDec_binmids = 0.5 * (self.sinDec_bins[:-1] + self.sinDec_bins[1:])
-        self._spline = scipy.interpolate.RectBivariateSpline(
-            sinDec_binmids, gamma_binmids, self.nuhist, kx=2, ky=2)
-
+    @gamma.setter
+    def gamma(self, val):
+        self._gamma = float(val)
+        print("Need to __call__ to set correct effA for the new gamma.")
         return
 
-    def _src_weight(self, src_ra, src_dec):
-        """For given src_dec(s) and a single gamma calculate src weights
-        from spline"""
-        gamma_rep = np.repeat(self._gamma, len(src_dec))
-        weights = self._spline.ev(src_dec, gamma_rep)
-        weights[weights < 0.] = 0.
-        return weights
+    def effA(self, src_decs, **params):
+        """Vectorized version for multiple src_decs"""
+        src_decs = np.atleast_1d(src_decs)
+        effA = self._spl_effA(np.sin(src_decs))
+        invalid = ((np.sin(src_decs) < self.sinDec_bins[0]) |
+                   (np.sin(src_decs) > self.sinDec_bins[-1]))
+        effA[invalid] = 0.
 
-    def signal(self, src_ra, src_dec, src_norm_w, ev):
-        # Create Signal for every src position
+        return effA, None
+
+    def signal(self, src_ra, src_dec, src_w, ev):
+        # Get src weights, multiply with detector weights and normalize
+        src_dec_w = self.effA(src_dec)[0]
+        src_norm_w = src_dec_w * src_w
+        src_norm_w = src_norm_w / np.sum(src_norm_w)
+
+        # Create Signal for every src position with normalized weights
         S = np.zeros((len(src_ra), len(ev)), dtype=np.float)
-        for i, (src_rai, src_deci, src_wi) in enumerate(zip(
+        for i, (src_rai, src_deci, src_norm_wi) in enumerate(zip(
                 src_ra, src_dec, src_norm_w)):
-            S[i] = src_wi * super(StackingPointSourceLLH, self).signal(
+            S[i] = src_norm_wi * super(StackingPointSourceLLH, self).signal(
                 src_rai, src_deci, ev)
 
         # Stacking: For every event sum up weighted contribution from every
