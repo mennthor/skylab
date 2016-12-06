@@ -888,6 +888,11 @@ class StackingPointSourceLLH(ClassicLLH):
         print("Need to __call__ to set correct effA for the new gamma.")
         return
 
+    def _norm_src_weights(self, src_decs, src_w):
+        src_dec_w = self.effA(src_decs)[0]
+        src_norm_w = src_dec_w * src_w
+        return src_norm_w / np.sum(src_norm_w)
+
     def effA(self, src_decs, **params):
         """Vectorized version for multiple src_decs"""
         src_decs = np.atleast_1d(src_decs)
@@ -900,9 +905,7 @@ class StackingPointSourceLLH(ClassicLLH):
 
     def signal(self, src_ra, src_dec, src_w, ev):
         # Get src weights, multiply with detector weights and normalize
-        src_dec_w = self.effA(src_dec)[0]
-        src_norm_w = src_dec_w * src_w
-        src_norm_w = src_norm_w / np.sum(src_norm_w)
+        src_norm_w = self._norm_src_weights(src_dec, src_w)
 
         # Create Signal for every src position with normalized weights
         S = np.zeros((len(src_ra), len(ev)), dtype=np.float)
