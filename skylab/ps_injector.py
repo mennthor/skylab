@@ -626,17 +626,66 @@ class StackingPointSourceInjector(PointSourceInjector):
     _src_priors = None
     _nsrcs = 0
 
-    @property
-    def srcs(self):
-        return self._srcs
+    _sinDec_bins = 25
 
-    @srcs.setter
-    def srcs(self, vals):
-        try:
-            src_ra, src_dec, src_w = vals
-        except:
-            raise ValueError("Need src, dec, ra and weights.")
-        # Make sure we are using 1D arrays
+
+    # Detector source weight calculation dependen on gamma and the MC
+    def _effA(self, mc, livetime, **kwargs):
+        """Same as in ps_model, make interpolationg spline from sinDec hist."""
+        # Powerlaw weights
+        w = mc["ow"] * mc["trueE"]**(-self.gamma) * livetime * 86400.
+        # Get pdf of event distribution
+        h, self.sinDec_bins = np.histogram(np.sin(mc["trueDec"]), weights=w,
+                                           range=self._sinDec_range,
+                                           bins=self.sinDec_bins, density=True)
+        # Normalize by solid angle
+        h /= np.diff(self.sinDec_bins)
+        # Multiply histogram by event sum for event densitiy
+        h *= w.sum()
+        # Interpolating spline. Attention: spline is in log(h)
+        binmids = 05 * (self.sinDec_bins[:-1] + self.sinDec_bins[1:])
+        self._spl_effA = scipy.interpolate.InterpolatedUnivariateSpline(
+            binmids, np.log(h), k=self.order)
+        return
+
+    def effA(self, src_decs):
+        """Vectorized version for multiple src_decs"""
+        src_decs = np.atleast_1d(src_decs)
+        effA = self._spl_effA(np.sin(src_decs))
+        invalid = ((np.sin(src_decs) < self.sinDec_bins[0]) |
+                   (np.sin(src_decs) > self.sinDec_bins[-1]))
+        effA[invalid] = 0.
+        return effA
+
+    def _norm_src_weights(self, src_decs, src_w):
+        """Calc total weight=det. w * theo. w and normalize"""
+        src_dec_w = self.effA(src_decs)
+        src_norm_w = src_dec_w * src_w
+        return src_norm_w / np.sum(src_norm_w)
+
+    @property
+    def gamma(self):
+        return self._gamma
+
+    @gamma.setter
+    def gamma(self, val):
+        self._gamma = float(val)
+        print("Need to fill() again to set correct effA for the new gamma.")
+        return
+
+    @property
+    def src(self):
+        return self._src
+
+    @src.setter
+    def src(self, src_ra, src_dec, src_w):
+        """
+        Give multiple source positions and weights that are used for the
+        stacking likelihood.
+        """
+        self.reset()
+
+        # make sure we are using 1D arrays
         src_ra = np.atleast_1d(src_ra)
         src_dec = np.atleast_1d(src_dec)
         src_w = np.atleast_1d(src_w)
@@ -647,30 +696,19 @@ class StackingPointSourceInjector(PointSourceInjector):
         if (np.any(src_dec < -np.pi / 2.) or np.any(src_dec > +np.pi / 2.)):
             raise ValueError("DEC value(s) not valid equatorial coordinates")
 
-        # Declinations must be in sinDec_range
-        if not (np.all(np.sin(src_dec) > self.sinDec_range[0]) and
-                np.all(np.sin(src_dec) < self.sinDec_range[1])):
-            raise ValueError("Given src declination(s) not in sinDec_range.")
-
         # Zero or smaller weights make no sense
         if np.any(src_w <= 0):
             raise ValueError("Invalid source weight(s) <= 0 detected.")
         # End of sanity checks
 
         self._nsrcs = len(src_ra)
-        # Weights must be normalized
-        src_w = src_w / np.sum(src_w)
 
         # Save as a recarray class variable
-        self._srcs = np.empty((self._nsrcs, ), dtype=[
-            ("ra", np.float), ("dec", np.float), ("norm_w", np.float)])
-        self._srcs["ra"] = src_ra
-        self._srcs["dec"] = src_dec
-        self._srcs["norm_w"] = src_w
-
-        # Call setup to calc solid angle for every source
-        self._setup()
-
+        self._src = np.empty((self._nsrcs, ), dtype=[
+            ("ra", np.float), ("dec", np.float), ("src_w", np.float)])
+        self._src["ra"] = src_ra
+        self._src["dec"] = src_dec
+        self._src["src_w"] = src_w
         return
 
     @property
@@ -679,6 +717,8 @@ class StackingPointSourceInjector(PointSourceInjector):
 
     @src_priors.setter
     def src_priors(self, maps):
+        if self.src is None:
+            raise ValueError("You need to specify a src array first.")
         # Check that prior healpy maps are valid
         if maps is not None:
             # Priors are arrays of map arrays
@@ -691,9 +731,9 @@ class StackingPointSourceInjector(PointSourceInjector):
         return
 
     def _setup(self):
-        """
-        This is vectorized and works for multiple src decs.
-        """
+        """Vectorized to work for multiple src decs"""
+        if self.src is None:
+            raise ValueError("You need to specify a src array first.")
         A, B = self._sinDec_range
 
         m = (A - B + 2. * self.sinDec_bandwidth) / (A - B)
@@ -707,15 +747,13 @@ class StackingPointSourceInjector(PointSourceInjector):
         self._min_dec = np.arcsin(min_sinDec)
         self._max_dec = np.arcsin(max_sinDec)
 
-        # solid angle of selected events
+        # Solid angles of selected events
         self._omega = 2. * np.pi * (max_sinDec - min_sinDec)
-
         return
 
+    ############### TODO############################
     def _weights(self):
-        r"""Setup weights for given models.
-
-        """
+        """Version for multiple srcs"""
         # weights given in days, weighted to the point source flux
         self.mc_arr["ow"] *= self.mc_arr["trueE"]**(-self.gamma) / self._omega
 
@@ -728,73 +766,43 @@ class StackingPointSourceInjector(PointSourceInjector):
         if self._norm_w.max() > 0.1:
             logger.warn("Warning: Maximal weight exceeds 10%: {0:7.2%}".format(
                             self._norm_w.max()))
+        return
+
+    ############### TODO############################
+    def fill(self, mc, livetime):
+        if self.src is None:
+            raise ValueError("You need to specify a src array before filling.")
+
+        super(HealpyInjector, self).fill(
+            src_dec=self.src["dec"], mc=mc, livetime=livetime)
+
+        # Now add 'dec' information to self.mc_arr to use it in `sample()`
+        self.mc_arr = np.lib.recfunctions.append_fields(
+            self.mc_arr, "dec", np.zeros(len(self.mc_arr), dtype=np.float),
+            dtypes=np.float, usemask=False)
+
+        # Loop over all MC samples in self.mc dict
+        enums = np.unique(self.mc_arr["enum"])
+        for enum in enums:
+            # Select single sample
+            mask = (self.mc_arr["enum"] == enum)
+            # Select all valid ids already stored in self.mc_arr
+            idx = self.mc_arr[mask]["idx"]
+            # Fetch 'dec' from self.mc and add to self.mc_arr
+            self.mc_arr[mask][idx]["dec"] = np.copy(self.mc[enum][idx]["dec"])
+
+            sout = (67 * "-" + "\nFill HealpyInjector info:"
+                    " Sample {:s}: Selected {:6d} events\n"
+                    "    DEC : {:7.2f}° - {:7.2f}°\n"
+                    "    E   : {:7.2f} and {:7.2f} in {:7.2f} GeV").format(
+                        str(enum), len(idx),
+                        np.rad2deg(self._min_dec), np.rad2deg(self._max_dec),
+                        self.e_range[0], self.e_range[1], self.GeV)
+            print(sout)
 
         return
 
-    def fill(self, src_dec, mc, livetime):
-        r"""Fill the Injector with MonteCarlo events selecting events around
-        the source position(s).
-
-        Parameters
-        -----------
-        src_dec : float, array-like
-            Source location(s)
-        mc : recarray, dict of recarrays with sample enum as key (MultiPointSourceLLH)
-            Monte Carlo events
-        livetime : float, dict of floats
-            Livetime per sample
-
-        """
-
-        if isinstance(mc, dict) ^ isinstance(livetime, dict):
-            raise ValueError("mc and livetime not compatible")
-
-        self.src_dec = src_dec
-
-        self.mc = dict()
-        self.mc_arr = np.empty(0, dtype=[("idx", np.int), ("enum", np.int),
-                                         ("trueE", np.float), ("ow", np.float)])
-
-        if not isinstance(mc, dict):
-            mc = {-1: mc}
-            livetime = {-1: livetime}
-
-        for key, mc_i in mc.iteritems():
-            # get MC event's in the selected energy and sinDec range
-            band_mask = ((np.sin(mc_i["trueDec"]) > np.sin(self._min_dec))
-                         &(np.sin(mc_i["trueDec"]) < np.sin(self._max_dec)))
-            band_mask &= ((mc_i["trueE"] / self.GeV > self.e_range[0])
-                          &(mc_i["trueE"] / self.GeV < self.e_range[1]))
-
-            if not np.any(band_mask):
-                print("Sample {0:d}: No events were selected!".format(key))
-                self.mc[key] = mc_i[band_mask]
-
-                continue
-
-            self.mc[key] = mc_i[band_mask]
-
-            N = np.count_nonzero(band_mask)
-            mc_arr = np.empty(N, dtype=self.mc_arr.dtype)
-            mc_arr["idx"] = np.arange(N)
-            mc_arr["enum"] = key * np.ones(N)
-            mc_arr["ow"] = self.mc[key]["ow"] * livetime[key] * 86400.
-            mc_arr["trueE"] = self.mc[key]["trueE"]
-
-            self.mc_arr = np.append(self.mc_arr, mc_arr)
-
-            print("Sample {0:s}: Selected {1:6d} events at {2:7.2f}deg".format(
-                        str(key), N, np.degrees(self.src_dec)))
-
-        if len(self.mc_arr) < 1:
-            raise ValueError("Select no events at all")
-
-        print("Selected {0:d} events in total".format(len(self.mc_arr)))
-
-        self._weights()
-
-        return
-
+    ############### TODO############################
     def flux2mu(self, flux):
         r"""Convert a flux to mean number of expected events.
 
@@ -820,6 +828,7 @@ class StackingPointSourceInjector(PointSourceInjector):
 
         return self._raw_flux * gev_flux
 
+    ############### TODO############################
     def mu2flux(self, mu):
         r"""Calculate the corresponding flux in [*GeV*^(gamma - 1) s^-1 cm^-2]
         for a given number of mean source events.
@@ -832,6 +841,7 @@ class StackingPointSourceInjector(PointSourceInjector):
                     * self.GeV**(1. - self.gamma) # turn from I3Unit to *GeV*
                     * self.E0**(2. - self.gamma)) # go from 1*GeV* to E0
 
+    ############### TODO############################
     def sample(self, src_ra, mean_mu, poisson=True):
         r""" Generator to get sampled events for a Point Source location.
 
