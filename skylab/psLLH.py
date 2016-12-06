@@ -44,6 +44,8 @@ from __init__ import set_pars
 from . import ps_model
 from . import utils
 
+# StackingLLH
+import healpy as hp
 
 # get module logger
 def trace(self, message, *args, **kwargs):
@@ -2148,6 +2150,7 @@ def fs(args):
 ############################################################################
 class StackingPointSourceLLH(PointSourceLLH):
     _src = None
+    _src_priors = None
 
     def __str__(self, verb=False):
         if verb:
@@ -2285,14 +2288,24 @@ class StackingPointSourceLLH(PointSourceLLH):
         return
 
     # PROPERTIES for public variables using getters and setters
-    # prior_skymap for constraining the position of the sources in the llh fit.
+    # prior_skymaps to constrain source positions in the llh fit.
     @property
-    def prior_skymap(self):
-        return self._prior_skymap
+    def src_priors(self):
+        return self._src_priors
 
-    @prior_skymap.setter
-    def prior_skymap(self, skymap):
-        self._prior_skymap = skymap
+    @src_priors.setter
+    def src_priors(self, maps):
+        if self.src is None:
+            raise ValueError("You need to specify a src array first.")
+        # Check that prior healpy maps are valid
+        if maps is not None:
+            # Priors are arrays of map arrays
+            _maps = np.atleast_2d(maps)
+            if not hp.maptype(_maps) == len(self.srcs):
+                raise ValueError("Healpy map priors must match number of" +
+                                 " sources, which must be given first.")
+            else:
+                self._src_priors = _maps
         return
 
     @property
