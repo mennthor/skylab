@@ -2182,7 +2182,7 @@ class StackingPointSourceLLH(PointSourceLLH):
         if self._src is not None:
             _src_ra = self._src["ra"]
             _src_dec = self._src["dec"]
-            _src_w = self._src["norm_w"]
+            _src_w = self._src["src_w"]
         else:
             raise ValueError("src list is None. Use `set_srcs()` to give one" +
                              " or mutliple src locations.")
@@ -2298,6 +2298,7 @@ class StackingPointSourceLLH(PointSourceLLH):
     @property
     def src(self):
         return self._src
+
     @src.setter
     def src(self, src_ra, src_dec, src_w):
         """
@@ -2324,26 +2325,12 @@ class StackingPointSourceLLH(PointSourceLLH):
 
         self._nsrcs = len(src_ra)
 
-        # Get src detector weight from BG spline -> Detector exposition
-        #   for every src position. Background expects recarray with field
-        #   'sinDec', so create it first.
-        src_sin_dec = np.zeros((self._nsrcs, ), dtype=[("sinDec", np.float)])
-        src_sin_dec["sinDec"] = np.sin(src_dec)
-        src_dec_w = self.llh_model.background(src_sin_dec)
-
-        # Normalize weights: Total = (Acceptance * Theoretical Weight) / Sum
-        src_norm_w = src_dec_w * src_w
-        src_norm_w = src_norm_w / np.sum(src_norm_w)
-
         # Save as a recarray class variable
         self._src = np.empty((self._nsrcs, ), dtype=[
-            ("ra", np.float), ("dec", np.float),
-            ("src_w", np.float), ("dec_w", np.float), ("norm_w", np.float)])
+            ("ra", np.float), ("dec", np.float), ("src_w", np.float)])
         self._src["ra"] = src_ra
         self._src["dec"] = src_dec
         self._src["src_w"] = src_w
-        self._src["dec_w"] = src_dec_w
-        self._src["norm_w"] = src_norm_w
 
         return
 
