@@ -627,10 +627,10 @@ class StackingPointSourceInjector(PointSourceInjector):
     _nsrcs = 0
 
     _sinDec_bins = 25
+    _spl_effA = None
 
-
-    # Detector source weight calculation dependen on gamma and the MC
-    def _effA(self, mc, livetime, **kwargs):
+    # Private Functions
+    def _effA(self, mc, livetime):
         """Same as in ps_model, make interpolationg spline from sinDec hist."""
         # Powerlaw weights
         w = mc["ow"] * mc["trueE"]**(-self.gamma) * livetime * 86400.
@@ -648,20 +648,49 @@ class StackingPointSourceInjector(PointSourceInjector):
             binmids, np.log(h), k=self.order)
         return
 
-    def effA(self, src_decs):
-        """Vectorized version for multiple src_decs"""
-        src_decs = np.atleast_1d(src_decs)
-        effA = self._spl_effA(np.sin(src_decs))
-        invalid = ((np.sin(src_decs) < self.sinDec_bins[0]) |
-                   (np.sin(src_decs) > self.sinDec_bins[-1]))
-        effA[invalid] = 0.
-        return effA
-
     def _norm_src_weights(self, src_decs, src_w):
         """Calc total weight=det. w * theo. w and normalize"""
         src_dec_w = self.effA(src_decs)
         src_norm_w = src_dec_w * src_w
         return src_norm_w / np.sum(src_norm_w)
+
+    def _setup(self):
+        """Vectorized to work for multiple src decs"""
+        if self.src is None:
+            raise ValueError("You need to specify a src array first.")
+        A, B = self._sinDec_range
+
+        m = (A - B + 2. * self.sinDec_bandwidth) / (A - B)
+        b = self.sinDec_bandwidth * (A + B) / (B - A)
+
+        sinDec = m * np.sin(self.src["dec"]) + b
+
+        min_sinDec = np.maximum(A, sinDec - self.sinDec_bandwidth)
+        max_sinDec = np.minimum(B, sinDec + self.sinDec_bandwidth)
+
+        self._min_dec = np.arcsin(min_sinDec)
+        self._max_dec = np.arcsin(max_sinDec)
+
+        # Solid angles of selected events
+        self._omega = 2. * np.pi * (max_sinDec - min_sinDec)
+        return
+
+    # ############## TODO############################
+    def _weights(self):
+        """Version for multiple srcs"""
+        # weights given in days, weighted to the point source flux
+        self.mc_arr["ow"] *= self.mc_arr["trueE"]**(-self.gamma) / self._omega
+
+        self._raw_flux = np.sum(self.mc_arr["ow"], dtype=np.float)
+
+        # normalized weights for probability
+        self._norm_w = self.mc_arr["ow"] / self._raw_flux
+
+        # double-check if no weight is dominating the sample
+        if self._norm_w.max() > 0.1:
+            logger.warn("Warning: Maximal weight exceeds 10%: {0:7.2%}".format(
+                            self._norm_w.max()))
+        return
 
     @property
     def gamma(self):
@@ -678,12 +707,15 @@ class StackingPointSourceInjector(PointSourceInjector):
         return self._src
 
     @src.setter
-    def src(self, src_ra, src_dec, src_w):
+    def src(self, vals):
         """
         Give multiple source positions and weights that are used for the
         stacking likelihood.
         """
-        self.reset()
+        # Unpack new values
+        if len(vals) != 3:
+            raise ValueError("Need (src_ra, src_dec, src_w).")
+        src_ra, src_dec, src_w = vals
 
         # make sure we are using 1D arrays
         src_ra = np.atleast_1d(src_ra)
@@ -709,6 +741,8 @@ class StackingPointSourceInjector(PointSourceInjector):
         self._src["ra"] = src_ra
         self._src["dec"] = src_dec
         self._src["src_w"] = src_w
+
+        self._setup()
         return
 
     @property
@@ -723,55 +757,31 @@ class StackingPointSourceInjector(PointSourceInjector):
         if maps is not None:
             # Priors are arrays of map arrays
             _maps = np.atleast_2d(maps)
-            if not hp.maptype(_maps) == len(self.srcs):
+            if not hp.maptype(_maps) == len(self.src):
                 raise ValueError("Healpy map priors must match number of" +
                                  " sources, which must be given first.")
             else:
                 self._src_priors = _maps
         return
 
-    def _setup(self):
-        """Vectorized to work for multiple src decs"""
-        if self.src is None:
-            raise ValueError("You need to specify a src array first.")
-        A, B = self._sinDec_range
+    # Public methods
+    def effA(self, src_decs):
+        if self._spl_effA is None:
+            raise ValueError("Need to fill() with MC before effA calculation.")
+        """Vectorized version for multiple src_decs"""
+        src_decs = np.atleast_1d(src_decs)
+        effA = self._spl_effA(np.sin(src_decs))
+        invalid = ((np.sin(src_decs) < self.sinDec_bins[0]) |
+                   (np.sin(src_decs) > self.sinDec_bins[-1]))
+        effA[invalid] = 0.
+        return effA
 
-        m = (A - B + 2. * self.sinDec_bandwidth) / (A - B)
-        b = self.sinDec_bandwidth * (A + B) / (B - A)
-
-        sinDec = m * np.sin(self.srcs["dec"]) + b
-
-        min_sinDec = np.maximum(A, sinDec - self.sinDec_bandwidth)
-        max_sinDec = np.minimum(B, sinDec + self.sinDec_bandwidth)
-
-        self._min_dec = np.arcsin(min_sinDec)
-        self._max_dec = np.arcsin(max_sinDec)
-
-        # Solid angles of selected events
-        self._omega = 2. * np.pi * (max_sinDec - min_sinDec)
-        return
-
-    ############### TODO############################
-    def _weights(self):
-        """Version for multiple srcs"""
-        # weights given in days, weighted to the point source flux
-        self.mc_arr["ow"] *= self.mc_arr["trueE"]**(-self.gamma) / self._omega
-
-        self._raw_flux = np.sum(self.mc_arr["ow"], dtype=np.float)
-
-        # normalized weights for probability
-        self._norm_w = self.mc_arr["ow"] / self._raw_flux
-
-        # double-check if no weight is dominating the sample
-        if self._norm_w.max() > 0.1:
-            logger.warn("Warning: Maximal weight exceeds 10%: {0:7.2%}".format(
-                            self._norm_w.max()))
-        return
-
-    ############### TODO############################
+    # ############## TODO############################
     def fill(self, mc, livetime):
         if self.src is None:
             raise ValueError("You need to specify a src array before filling.")
+
+        self._effA(mc, livetime)
 
         super(HealpyInjector, self).fill(
             src_dec=self.src["dec"], mc=mc, livetime=livetime)
