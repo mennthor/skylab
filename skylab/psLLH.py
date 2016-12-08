@@ -2301,7 +2301,7 @@ class StackingPointSourceLLH(PointSourceLLH):
         if maps is not None:
             # Priors are arrays of map arrays
             _maps = np.atleast_2d(maps)
-            if not hp.maptype(_maps) == len(self.srcs):
+            if not hp.maptype(_maps) == len(self.src):
                 raise ValueError("Healpy map priors must match number of" +
                                  " sources, which must be given first.")
             else:
@@ -2313,12 +2313,17 @@ class StackingPointSourceLLH(PointSourceLLH):
         return self._src
 
     @src.setter
-    def src(self, src_ra, src_dec, src_w):
+    def src(self, vals):
         """
         Give multiple source positions and weights that are used for the
         stacking likelihood.
         """
         self.reset()
+
+        # Unpack new values
+        if len(vals) != 3:
+            raise ValueError("Need (src_ra, src_dec, src_w).")
+        src_ra, src_dec, src_w = vals
 
         # make sure we are using 1D arrays
         src_ra = np.atleast_1d(src_ra)
