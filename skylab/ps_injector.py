@@ -624,6 +624,7 @@ class StackingPointSourceInjector(PointSourceInjector):
 
     _srcs = None
     _src_priors = None
+    _src_norm_w = None
     _nsrcs = 0
 
     _sinDec_bins = 25
@@ -668,28 +669,11 @@ class StackingPointSourceInjector(PointSourceInjector):
         min_sinDec = np.maximum(A, sinDec - self.sinDec_bandwidth)
         max_sinDec = np.minimum(B, sinDec + self.sinDec_bandwidth)
 
-        self._min_dec = np.arcsin(min_sinDec)
-        self._max_dec = np.arcsin(max_sinDec)
+        self._min_dec = np.atleast_1d(np.arcsin(min_sinDec))
+        self._max_dec = np.atleast_1d(np.arcsin(max_sinDec))
 
         # Solid angles of selected events
-        self._omega = 2. * np.pi * (max_sinDec - min_sinDec)
-        return
-
-    # ############## TODO############################
-    def _weights(self):
-        """Version for multiple srcs"""
-        # weights given in days, weighted to the point source flux
-        self.mc_arr["ow"] *= self.mc_arr["trueE"]**(-self.gamma) / self._omega
-
-        self._raw_flux = np.sum(self.mc_arr["ow"], dtype=np.float)
-
-        # normalized weights for probability
-        self._norm_w = self.mc_arr["ow"] / self._raw_flux
-
-        # double-check if no weight is dominating the sample
-        if self._norm_w.max() > 0.1:
-            logger.warn("Warning: Maximal weight exceeds 10%: {0:7.2%}".format(
-                            self._norm_w.max()))
+        self._omega = np.atleast_1d(2. * np.pi * (max_sinDec - min_sinDec))
         return
 
     @property
@@ -699,7 +683,7 @@ class StackingPointSourceInjector(PointSourceInjector):
     @gamma.setter
     def gamma(self, val):
         self._gamma = float(val)
-        print("Need to fill() again to set correct effA for the new gamma.")
+        print("Call fill(mc, ...) to set the correct effA for the new gamma.")
         return
 
     @property
@@ -776,40 +760,99 @@ class StackingPointSourceInjector(PointSourceInjector):
         effA[invalid] = 0.
         return effA
 
-    # ############## TODO############################
-    def fill(self, mc, livetime):
-        if self.src is None:
-            raise ValueError("You need to specify a src array before filling.")
+    def _weights(self):
+        """Version for multiple srcs"""
+        # Calculate total src weights = det. weight * theo. src weight
+        src_dec_w = self.effA(self.src["dec"])
+        src_norm_w = src_dec_w * self.src["src_w"]
+        self._src_norm_w = src_norm_w / np.sum(src_norm_w)
 
+        # Now calculate per event weight using the given gamma and the
+        # declination bands.
+        for (omega, min_dec, max_dec) in zip(
+                self._omega, self._min_dec, self._max_dec):
+            # Weights given in days, weighted to the point source flux
+            self.mc_arr["ow"] *= self.mc_arr["trueE"]**(-self.gamma) / self._omega
+
+            self._raw_flux = np.sum(self.mc_arr["ow"], dtype=np.float)
+
+            # normalized weights for probability
+            self._norm_w = self.mc_arr["ow"] / self._raw_flux
+
+            # double-check if no weight is dominating the sample
+            if self._norm_w.max() > 0.1:
+                logger.warn("Warning: Maximal weight exceeds 10%: {0:7.2%}".format(
+                            self._norm_w.max()))
+        return
+
+    def fill(self, mc, livetime, src_array):
+        # First set sources, then effA, then call super, which calls _weight
+        self.src = src_array
         self._effA(mc, livetime)
 
-        super(HealpyInjector, self).fill(
-            src_dec=self.src["dec"], mc=mc, livetime=livetime)
+        # Modified part from ClassicLLH
+        if isinstance(mc, dict) ^ isinstance(livetime, dict):
+            raise ValueError("mc and livetime not compatible")
 
-        # Now add 'dec' information to self.mc_arr to use it in `sample()`
-        self.mc_arr = np.lib.recfunctions.append_fields(
-            self.mc_arr, "dec", np.zeros(len(self.mc_arr), dtype=np.float),
-            dtypes=np.float, usemask=False)
+        self.src_dec = self.src["dec"]
 
-        # Loop over all MC samples in self.mc dict
-        enums = np.unique(self.mc_arr["enum"])
-        for enum in enums:
-            # Select single sample
-            mask = (self.mc_arr["enum"] == enum)
-            # Select all valid ids already stored in self.mc_arr
-            idx = self.mc_arr[mask]["idx"]
-            # Fetch 'dec' from self.mc and add to self.mc_arr
-            self.mc_arr[mask][idx]["dec"] = np.copy(self.mc[enum][idx]["dec"])
+        self.mc = dict()
+        # src_enum saves for which source the event was inserted
+        self.mc_arr = np.empty(0, dtype=[("idx", np.int),
+                                         ("enum", np.int),
+                                         ("src_enum", np.int),
+                                         ("dec", np.float),
+                                         ("trueE", np.float),
+                                         ("ow", np.float)])
 
-            sout = (67 * "-" + "\nFill HealpyInjector info:"
-                    " Sample {:s}: Selected {:6d} events\n"
-                    "    DEC : {:7.2f}° - {:7.2f}°\n"
-                    "    E   : {:7.2f} and {:7.2f} in {:7.2f} GeV").format(
-                        str(enum), len(idx),
-                        np.rad2deg(self._min_dec), np.rad2deg(self._max_dec),
-                        self.e_range[0], self.e_range[1], self.GeV)
-            print(sout)
+        if not isinstance(mc, dict):
+            mc = {-1: mc}
+            livetime = {-1: livetime}
 
+        print(67 * "-" + "\nStackingLLHInjector fill() info:")
+        for j, (omega, min_dec, max_dec) in enumerate(zip(
+                self._omega, self._min_dec, self._max_dec)):
+            print("  Source {:2d}".format(j))
+            print("    DEC : {:7.2f}° - {:7.2f}°".format(
+                np.rad2deg(min_dec), np.rad2deg(max_dec)))
+            print("    E   : {:7.2f} and {:7.2f} in {:7.2f} GeV".format(
+                self.e_range[0], self.e_range[1], self.GeV))
+
+            for key, mc_i in mc.iteritems():
+                # Get MC event's in the selected energy and sinDec range
+                band_mask = ((np.sin(mc_i["trueDec"]) > np.sin(self._min_dec))
+                             &(np.sin(mc_i["trueDec"]) < np.sin(self._max_dec)))
+                band_mask &= ((mc_i["trueE"] / self.GeV > self.e_range[0])
+                              &(mc_i["trueE"] / self.GeV < self.e_range[1]))
+
+                if not np.any(band_mask):
+                    print("Sample {0:d}: No events were selected!".format(key))
+                    self.mc[key] = mc_i[band_mask]
+
+                    continue
+
+                self.mc[key] = mc_i[band_mask]
+
+                N = np.count_nonzero(band_mask)
+                mc_arr = np.empty(N, dtype=self.mc_arr.dtype)
+                mc_arr["idx"] = np.arange(N)
+                mc_arr["enum"] = key * np.ones(N)
+                mc_arr["src_enum"] = self.mc[key]["dec"]
+                mc_arr["ow"] = self.mc[key]["ow"] * livetime[key] * 86400.
+                mc_arr["trueE"] = self.mc[key]["trueE"]
+                mc_arr["dec"] = self.mc[key]["dec"]
+
+                self.mc_arr = np.append(self.mc_arr, mc_arr)
+
+                print("Sample {0:s}: Selected {1:6d} events at {2:7.2f}deg".format(
+                            str(key), N, np.degrees(self.src_dec)))
+
+        if len(self.mc_arr) < 1:
+            raise ValueError("Select no events at all")
+
+        print("Selected {0:d} events in total".format(len(self.mc_arr)))
+
+        self._weights()
         return
 
     ############### TODO############################
