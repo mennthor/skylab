@@ -622,7 +622,7 @@ class StackingPointSourceInjector(PointSourceInjector):
     _random = np.random.RandomState()
     _seed = None
 
-    _srcs = None
+    _src = None
     _src_priors = None
     _src_norm_w = None
     _nsrcs = 0
@@ -687,43 +687,6 @@ class StackingPointSourceInjector(PointSourceInjector):
         self._omega = np.atleast_1d(2. * np.pi * (max_sinDec - min_sinDec))
         return
 
-    def _weights(self):
-        """Version for multiple srcs. Calculate src total normed weight and
-        event weights with the injected raw flux for given srcs."""
-        # First calculate total src weights = det. weight * theo. src weight
-        src_norm_w = self.effA(self.src["dec"]) * self.src["src_w"]
-        self._src_norm_w = src_norm_w / np.sum(src_norm_w)
-
-        # Init for loop below
-        self._raw_flux_per_src = np.zeros(len(self.srcs), dtpye=np.float)
-        self._norm_w = np.zeros_like(self.mc_arr["ow"], dtpye=np.float)
-
-        # Loop over all selected events per src and calc the raw_flux per src
-        for src_idx in np.unique(self.mc_arr["src_enum"]):
-            src_mask = (self.mc_arr["src_enum"] == src_idx)
-
-            # Finalize event weight calculation and save in mc_arr
-            trueEi = self.mc_arr["trueE"][src_mask]
-            omegai = self._omega[src_idx]
-            self.mc_arr["ow"][src_mask] *= trueEi**(-self.gamma) / omegai
-
-            # Raw flux per source
-            self._raw_flux_per_src[src_idx] = np.sum(
-                self.mc_arr["ow"][src_mask], dtype=np.float)
-
-            # Normalized weights per source for sample probability
-            self._norm_w[src_mask] = (self.mc_arr["ow"][src_mask] /
-                                      self._raw_flux_per_src[src_idx])
-
-            # Double-check if no weight is dominating the sample
-            if self._norm_w[src_mask].max() > 0.1:
-                logger.warn("Warning: Maximal weight exceeds 10%: " +
-                            "{0:7.2%}".format(self._norm_w.max()))
-
-        # Calc total inserted flux for all srcs by weighting with src weights
-        self._raw_flux = np.sum(self._src_norm_w * self._raw_flux_per_src)
-        return
-
     def _select_events(self, src_dec):
         """Select events from the original MC dict for the current src dec
         positions that are sampled in sample() and store in a new array."""
@@ -738,11 +701,11 @@ class StackingPointSourceInjector(PointSourceInjector):
                                          ("trueE", np.float),
                                          ("ow", np.float)])
 
-        # Init class dict to store events per source. Might be a better way to
-        # do this...
+        # Init class dict to store selected events per source. Might be a
+        # better way to do this...
         self.mc_sel = {}
         for key in self.mc.iterkeys():
-            self.mc[key] = {}
+            self.mc_sel[key] = {}
 
         # For every source select events in source's declination band,
         # calculated in `_setup()`, from every MC sample in given dict.
@@ -794,9 +757,46 @@ class StackingPointSourceInjector(PointSourceInjector):
 
         print("Selected {0:d} events in total".format(len(self.mc_arr)))
 
-        #
+        # Update event and src weights for current selection
         self._weights()
 
+        return
+
+    def _weights(self, src_dec):
+        """Version for multiple srcs. Calculate src total normed weight and
+        event weights with the injected raw flux for given srcs."""
+        # First calculate total src weights = det. weight * theo. src weight
+        src_norm_w = self.effA(src_dec) * self._src["src_w"]
+        self._src_norm_w = src_norm_w / np.sum(src_norm_w)
+
+        # Init for loop below
+        self._raw_flux_per_src = np.zeros(len(self._src), dtpye=np.float)
+        self._norm_w = np.zeros(len(self.mc_arr), dtpye=np.float)
+
+        # Loop over all selected events per src and calc the raw_flux per src
+        for src_idx in np.unique(self.mc_arr["src_enum"]):
+            src_mask = (self.mc_arr["src_enum"] == src_idx)
+
+            # Finalize event weight calculation and save in mc_arr
+            trueEi = self.mc_arr["trueE"][src_mask]
+            omegai = self._omega[src_idx]
+            self.mc_arr["ow"][src_mask] *= trueEi**(-self.gamma) / omegai
+
+            # Raw flux per source
+            self._raw_flux_per_src[src_idx] = np.sum(
+                self.mc_arr["ow"][src_mask], dtype=np.float)
+
+            # Normalized weights per source for sample probability
+            self._norm_w[src_mask] = (self.mc_arr["ow"][src_mask] /
+                                      self._raw_flux_per_src[src_idx])
+
+            # Double-check if no weight is dominating the sample
+            if self._norm_w[src_mask].max() > 0.1:
+                logger.warn("Warning: Maximal weight exceeds 10%: " +
+                            "{0:7.2%}".format(self._norm_w[src_mask].max()))
+
+        # Calc total inserted flux for all srcs by weighting with src weights
+        self._raw_flux = np.sum(self._src_norm_w * self._raw_flux_per_src)
         return
 
     @property
@@ -877,47 +877,36 @@ class StackingPointSourceInjector(PointSourceInjector):
             else:
                 self._src_priors = src_priors
 
-        # Calculate effA once for current MCs
+        # Calculate effA spline once for current MCs
         self._effA()
 
         return
 
-    # TODO ###################################################################
     def sample(self, src_ra, mean_mu, poisson=True):
-        r""" Generator to get sampled events for a Point Source location.
+        # External src_ra not needed but kept for usability in psLLH.py
+        src_ra = np.nan
 
-        Parameters
-        -----------
-        mean_mu : float
-            Mean number of events to sample
-
-        Returns
-        --------
-        num : int
-            Number of events
-        sam_ev : iterator
-            sampled_events for each loop iteration, either as simple array or
-            as dictionary for each sample
-
-        Optional Parameters
-        --------------------
-        poisson : bool
-            Use poisson fluctuations, otherwise sample exactly *mean_mu*
-
-        """
-
-        # generate event numbers using poissonian events
+        # Generate event numbers using poissonian events
         while True:
             num = (self.random.poisson(mean_mu)
-                        if poisson else int(np.around(mean_mu)))
+                   if poisson else int(np.around(mean_mu)))
 
-            logger.debug(("Generated number of sources: {0:3d} "+
+            logger.debug(("Generated number of sources: {0:3d} " +
                           "of mean {1:5.1f} sources").format(num, mean_mu))
 
-            # if no events should be sampled, return nothing
+            # If no events should be sampled, return nothing
             if num < 1:
                 yield num, None
                 continue
+
+            # If we have src priors, sample new src positions from each priors
+            if self.src_priors is not None:
+                src_idx = []
+                for prior in self.src_priors:
+                    src_idx += [amp_hp.healpy_rejection_sampler(prior, n=1)]
+            else:
+                src_ra = self.src["ra"]
+                src_dec = self.src["dec"]
 
             sam_idx = self.random.choice(self.mc_arr, size=num, p=self._norm_w)
 
