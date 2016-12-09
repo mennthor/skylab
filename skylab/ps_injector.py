@@ -876,16 +876,16 @@ class StackingPointSourceInjector(PointSourceInjector):
                 raise ValueError("Healpy map priors must match number of srcs")
             else:
                 self._src_priors = src_priors
+                self._NSIDE = hp.get_nside(src_priors[0])
 
         # Calculate effA spline once for current MCs
         self._effA()
 
         return
 
+    # TODO #############################################################
     def sample(self, src_ra, mean_mu, poisson=True):
-        # External src_ra not needed but kept for usability in psLLH.py
-        src_ra = np.nan
-
+        """External src_ra not needed but kept for usability in psLLH.py"""
         # Generate event numbers using poissonian events
         while True:
             num = (self.random.poisson(mean_mu)
@@ -899,14 +899,24 @@ class StackingPointSourceInjector(PointSourceInjector):
                 yield num, None
                 continue
 
-            # If we have src priors, sample new src positions from each priors
+            # If we have src priors, sample new src positions from each prior
             if self.src_priors is not None:
                 src_idx = []
                 for prior in self.src_priors:
                     src_idx += [amp_hp.healpy_rejection_sampler(prior, n=1)]
+                # Get equatorial coordinates for the new src positions
+                src_th, src_phi = hp.pix2ang(self._NSIDE, src_idx)
+                src_dec, src_ra = amp_hp.ThetaPhiToDecRa(src_th, src_phi)
+                src_dec = np.atleast_1d(src_dec)
+                src_ra = np.atleast_1d(src_ra)
             else:
                 src_ra = self.src["ra"]
                 src_dec = self.src["dec"]
+
+            # Now setup dec bands and select events for the new src positions
+            self._setup(src_dec)
+            self._select_events(src_dec)
+
 
             sam_idx = self.random.choice(self.mc_arr, size=num, p=self._norm_w)
 
