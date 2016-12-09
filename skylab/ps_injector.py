@@ -786,9 +786,14 @@ class StackingPointSourceInjector(PointSourceInjector):
             self._raw_flux_per_src[src_idx] = np.sum(
                 self.mc_arr["ow"][src_mask], dtype=np.float)
 
-            # Normalized weights per source for sample probability
+            # Normalized weights per source to flux per source to obtain a
+            # weight normalized for each src on its own.
             self._norm_w[src_mask] = (self.mc_arr["ow"][src_mask] /
                                       self._raw_flux_per_src[src_idx])
+            # Now multiply with normalized src weights to get sampling weight
+            # for all events in the selected sample.
+            # This automatically samples events at srcs with higher weights.
+            self._norm_w[src_mask] *= self._src_norm_w[src_idx]
 
             # Double-check if no weight is dominating the sample
             if self._norm_w[src_mask].max() > 0.1:
@@ -883,7 +888,6 @@ class StackingPointSourceInjector(PointSourceInjector):
 
         return
 
-    # TODO #############################################################
     def sample(self, src_ra, mean_mu, poisson=True):
         """External src_ra not needed but kept for usability in psLLH.py"""
         # Generate event numbers using poissonian events
@@ -910,6 +914,7 @@ class StackingPointSourceInjector(PointSourceInjector):
                 src_dec = np.atleast_1d(src_dec)
                 src_ra = np.atleast_1d(src_ra)
             else:
+                # Otherwise use static given src positions for each trial
                 src_ra = self.src["ra"]
                 src_dec = self.src["dec"]
 
@@ -917,19 +922,20 @@ class StackingPointSourceInjector(PointSourceInjector):
             self._setup(src_dec)
             self._select_events(src_dec)
 
-
+            # Sample num events from all selected events with the global weight
             sam_idx = self.random.choice(self.mc_arr, size=num, p=self._norm_w)
 
-            # get the events that were sampled
+            # Get the events that were sampled from the selected events MC dict
             enums = np.unique(sam_idx["enum"])
 
             if len(enums) == 1 and enums[0] < 0:
-                # only one sample, just return recarray
-                sam_ev = np.copy(self.mc[enums[0]][sam_idx["idx"]])
+                # Only one sample, just return recarray
+                sam_ev = np.copy(self.mc_sel[enums[0]][sam_idx["idx"]])
 
                 yield num, rotate_struct(sam_ev, src_ra, self.src_dec)
                 continue
 
+            # Otherwise return samples in dict with MC key they belong to
             sam_ev = dict()
             for enum in enums:
                 idx = sam_idx[sam_idx["enum"] == enum]["idx"]
