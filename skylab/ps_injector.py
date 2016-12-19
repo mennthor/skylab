@@ -814,7 +814,7 @@ class StackingPointSourceInjector(PointSourceInjector):
         if self.mc is not None:
             self._effA()
         else:
-            raise ValueError("No MC setup. Use fill() to do so.")
+            print("No MC setup for effA. Use fill() to do so.")
         return
 
     # Public methods
