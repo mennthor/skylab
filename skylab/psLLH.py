@@ -2166,8 +2166,6 @@ class StackingPointSourceLLH(PointSourceLLH):
             sout += "    RAs          : {}\n".format(self._src["ra"])
             sout += "    DECs         : {}\n".format(self._src["dec"])
             sout += "    src. weights : {}\n".format(self._src["src_w"])
-            sout += "    det. weights : {}\n".format(self._src["dec_w"])
-            sout += "    normed w_tot : {}\n".format(self._src["norm_w"])
         sout += 67 * "-" + "\n"
 
         return sout
@@ -2287,21 +2285,21 @@ class StackingPointSourceLLH(PointSourceLLH):
 
         return
 
-    # PROPERTIES for public variables using getters and setters
-    # prior_skymaps to constrain source positions in the llh fit.
+    # PROPERTIES
     @property
     def src_priors(self):
+        """ Prior_skymaps to constrain source positions in the llh fit"""
         return self._src_priors
 
     @src_priors.setter
     def src_priors(self, maps):
-        if self.src is None:
+        if self._src is None:
             raise ValueError("You need to specify a src array first.")
         # Check that prior healpy maps are valid
         if maps is not None:
             # Priors are arrays of map arrays
             _maps = np.atleast_2d(maps)
-            if not hp.maptype(_maps) == len(self.src):
+            if not hp.maptype(_maps) == len(self._src):
                 raise ValueError("Healpy map priors must match number of" +
                                  " sources, which must be given first.")
             else:
