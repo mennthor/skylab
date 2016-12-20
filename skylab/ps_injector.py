@@ -645,7 +645,6 @@ class StackingPointSourceInjector(PointSourceInjector):
 
         self.mc = dict()
         self.mc_arr = np.empty(0, dtype=[("idx", np.int),("src_idx", np.int), ("enum", np.int)])
-                                         
 
 
         if not isinstance(mc, dict):
