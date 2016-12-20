@@ -39,6 +39,7 @@ import scipy.interpolate
 import scipy.optimize
 import scipy.stats
 from scipy.signal import convolve2d
+import scipy.sparse as sps
 
 # local package imports
 from . import set_pars
@@ -63,7 +64,7 @@ logger.addHandler(logging.StreamHandler())
 _aval = 1.e-3
 _b_eps = 0.9
 _beta_val = 0.5
-_delta_ang = np.radians(10.)
+_delta_ang = np.radians(20.)
 _eps = 5.e-3
 _ev = None
 _ev_S = np.nan
@@ -1117,7 +1118,7 @@ class PointSourceLLH(object):
         grad = 2. * grad
 
         return LogLambda, grad
-
+    #@profile
     def fit_source(self, src_ra, src_dec, **kwargs):
         """Minimize the negative log-Likelihood at source position(s).
 
@@ -1210,6 +1211,7 @@ class PointSourceLLH(object):
                                     **kwargs)
 
             i += 1
+            print('Iteration: ',i)
         
         if fmin > 0 and (self.par_bounds[0][0] <= 0
                          and self.par_bounds[0][1] >= 0):
@@ -1538,7 +1540,7 @@ class PointSourceLLH(object):
         eps = kwargs.pop("eps", _eps)
         fit = kwargs.pop("fit", None)
         w_theoMC = kwargs.pop('w_theoMC', np.ones_like(np.atleast_1d(src_dec)))
-        
+        kwargs.setdefault('w_theo', np.ones_like(np.atleast_1d(src_dec)))
 
         if fit is not None and not hasattr(fit, "isf"):
             raise AttributeError("fit must have attribute 'isf(alpha)'!")
@@ -1854,7 +1856,7 @@ class MultiPointSourceLLH(PointSourceLLH):
         out_str += 67*"-"
 
         return out_str
-
+    @profile
     def _select_events(self, src_ra, src_dec, **kwargs):
         r"""Select events around source location(s) used in llh calculation.
 
@@ -2140,12 +2142,18 @@ class StackingPointSourceLLH(PointSourceLLH):
 
         #Same initialisation as in single point source llh class
         super(StackingPointSourceLLH, self).__init__(*args, **kwargs)
+        
+        print('Events with sigma > 3degree: ',np.count_nonzero(self.exp['sigma']>np.radians(3)))
+        print('Events with sigma > 5degree: ',np.count_nonzero(self.exp['sigma']>np.radians(5)))
+
         return
 
 
     # INTERNAL METHODS
-
+    @profile
     def _select_events(self, src_ra, src_dec, **kwargs):
+        
+
         r"""Select events around source locations used in llh calculation.
 
         Parameters
@@ -2173,7 +2181,6 @@ class StackingPointSourceLLH(PointSourceLLH):
 
         
         
-        
         # reset
         self.reset()
 
@@ -2194,25 +2201,51 @@ class StackingPointSourceLLH(PointSourceLLH):
         N_src = len(src_ra)
 
 
+        
+
+
         if self.mode == "all" :
             # all events are selected
             exp_mask = np.ones_like(self.exp["sinDec"], dtype=np.bool)
+            self._ev = self.exp[exp_mask]
 
         elif self.mode in ["band", "box"]:
             # get events that are within at least one declination band
-            exp_mask = ((self.exp["sinDec"] > np.sin(min_dec)[:, np.newaxis])
-                            &(self.exp["sinDec"] < np.sin(max_dec)[:, np.newaxis])).any(axis=0)
+            # --> create sparse matrix and remove events which are in no src dec band
+            exp_mask = sps.csr_matrix(((self.exp["sinDec"] > np.sin(min_dec)[:, np.newaxis])&(self.exp["sinDec"] < np.sin(max_dec)[:, np.newaxis]))
+                    |(self.exp['sigma']>(np.ones_like(src_dec)*np.radians(3.))[:,np.newaxis]))
+
+            mask = exp_mask.getnnz(axis=0)>0
+            exp_mask = exp_mask.transpose()[mask].transpose()
+
+            #row indices display the indices of the respective data event
+            ev_ind = exp_mask.indices #--> careful: the numbering of the indices and data is turned around
+            indptr = exp_mask.indptr
+
+            #col index of the respective source for each event
+            indices = np.repeat(np.arange(N_src), np.diff(indptr))
+
+
+            if self.mode is not 'box':
+                #row indices display the indices of the respective data event
+                ev_ind = exp_mask.indices #--> careful: the numbering of the indices and data is turned around
+                indptr = exp_mask.indptr
+
+                #col index of the respective source for each event
+                indices = np.repeat(np.arange(N_src), np.diff(indptr))
+
+                #total mask
+                exp_mask = mask
+
+                # update the zenith selection and background probability
+                self._ev = self.exp[exp_mask]
+
+            else:
+                self._ev = self.exp[mask]
+
 
         else:
             raise ValueError("Not supported mode: {0:s}".format(self.mode))
-
-        # update the zenith selection and background probability
-        self._ev = self.exp[exp_mask]
-
-        # update rightascension information for scrambled events
-        if scramble and not self.fix:
-            self._ev["ra"] = self.random.uniform(0., 2. * np.pi,
-                                                 size=len(self._ev))
 
 
         # inject events
@@ -2226,6 +2259,11 @@ class StackingPointSourceLLH(PointSourceLLH):
             self._N += len(inject)
 
 
+        # update rightascension information for scrambled events
+        if scramble and not self.fix:
+            self._ev["ra"] = self.random.uniform(0., 2. * np.pi,
+                                                 size=len(self._ev))
+
 
 
         # selection in rightascension
@@ -2235,59 +2273,51 @@ class StackingPointSourceLLH(PointSourceLLH):
             # the rightascension value has to change with declination
             cosFact = np.amin(np.cos([min_dec, max_dec]),axis=0)
             dPhi = np.amin([np.repeat(2. * np.pi,N_src), 2. * self.delta_ang / cosFact],axis=0)
-            ra_dist = np.fabs(np.fmod(self._ev["ra"] - src_ra[:,np.newaxis] + np.pi, 2. * np.pi)
-                              - np.pi)
+            #calculate ra_dist only for events that are still in exp_mask
+            mask_ra = np.fabs(np.fmod(self._ev["ra"][ev_ind] - src_ra[indices] + np.pi, 2. * np.pi)
+                             - np.pi)
 
-            mask_ra = ra_dist < dPhi[:,np.newaxis]/2.
-            mask_dec = (self._ev["sinDec"] > np.sin(min_dec)[:, np.newaxis]) \
-                        &(self._ev["sinDec"] < np.sin(max_dec)[:, np.newaxis])
+            #right ascension mask
+            mask_ra = (mask_ra < (dPhi[indices]/2.))|(self._ev['sigma'][ev_ind] > np.radians(3.))
+            #box mask
+            exp_mask.data *= mask_ra
+            exp_mask = sps.csr_matrix(exp_mask.toarray())
 
-            tot_mask = mask_ra&mask_dec
-            mask = np.any(tot_mask, axis=0)
-            tot_mask = tot_mask.T[mask].T
+            #remove events that are in no box at all
+            mask = exp_mask.getnnz(axis=0)>0
+            exp_mask = exp_mask.transpose()[mask].transpose()
 
+            #row indices display the indices of the respective data event
+            ev_ind = exp_mask.indices #--> careful: the numbering of the indices and data is turned around
+            indptr = exp_mask.indptr
+            #col index of the respective source for each event
+            indices = np.repeat(np.arange(N_src), np.diff(indptr))
 
-            self._ev = self._ev[mask]
-            index = np.arange(len(self._ev))
-
-            #save the index of the events in the box around each source
-            ind = dict()
-            for i,m_i in enumerate(tot_mask):
-                ind[i] = index[m_i]
-
+            exp_mask = mask
+            self._ev = self._ev[exp_mask]
 
         self._src_ra = src_ra
         self._src_dec = src_dec
 
 
         # calculate signal term
-        if self.mode != 'box':
-            self._ev_S = self.llh_model.signal(src_ra, src_dec, self._ev)
-        else:
-            # Only calculate signal llh of events within box around the respective source,
-            # else set the value to 0
-            self._ev_S = np.zeros((len(src_dec),len(self._ev)))
-            for i, dec_i in enumerate(src_dec):
-                self._ev_S[i][ind[i]] = self.llh_model.signal(src_ra[i],dec_i,self._ev[ind[i]])
-
-
-        # do not calculate values with signal below threshold for every source
-        ev_mask = np.any(self._ev_S > self.thresh_S,axis=0)
-        self._ev = self._ev[ev_mask]
-        self._ev_S = (self._ev_S.T[ev_mask]).T
+        if self.mode == 'all':
+            self._ev_S = sps.csr_matrix(np.array(self.llh_model.signal(src_ra, src_dec, self._ev),dtype=np.float32))
+        elif self.mode in ['band', 'box']:
+            ra = src_ra[indices]
+            dec = src_dec[indices]
+            self._ev_S = sps.csr_matrix((np.array(self.llh_model.fast_signal(ra, dec, self._ev, ev_ind),dtype=np.float32), ev_ind, indptr))
 
         # set number of selected events
         self._n = len(self._ev)
 
-        if (self._n < 1
-            and (np.sin(self._src_dec) < self.sinDec_range[0]
-                 and np.sin(self._src_dec) > self.sinDec_range[-1])):
+        if self._n < 1:
             logger.error("No event was selected, fit will go to -infinity")
 
         return
 
 
-
+    @profile
     def llh(self, **fit_pars):
         r"""Calculate the likelihood ratio for the selected events.
 
@@ -2313,7 +2343,6 @@ class StackingPointSourceLLH(PointSourceLLH):
         """
 
         nsources = fit_pars.pop("nsources")
-        
         assert(len(self._src_dec) == len(self._w_theo))
         
 
@@ -2334,7 +2363,8 @@ class StackingPointSourceLLH(PointSourceLLH):
         w_tot_grad = (src_w_grad['gamma'] * self._w_theo) / norm
         
 
-        SoB = np.tensordot(self._ev_S, w_tot, axes=(0,0))
+        #SoB = np.tensordot(self._ev_S, w_tot, axes=(0,0))
+        SoB = self._ev_S.transpose().dot(w_tot)
         SoB /= self._ev["B"]
 
 
@@ -2372,7 +2402,9 @@ class StackingPointSourceLLH(PointSourceLLH):
             ns_grad -= (N - n) / (N - nsources)
 
         # in weights 
-        grad_S = np.tensordot(self._ev_S, w_tot_grad, axes=(0,0))/ self._ev['B'] - SoB * np.sum(w_tot_grad)
+        
+        #grad_S = np.tensordot(self._ev_S, w_tot_grad, axes=(0,0))/ self._ev['B'] - SoB * np.sum(w_tot_grad)
+        grad_S = self._ev_S.transpose().dot(w_tot_grad) / self._ev['B'] - SoB * np.sum(w_tot_grad)
 
         if grad_w is not None:
             par_grad = 1./N * (w * grad_S + SoB * grad_w)
@@ -2638,7 +2670,7 @@ class StackingMultiPointSourceLLH(MultiPointSourceLLH):
 
         return logLambda, logLambda_grad
 
-
+    @profile
     def fit_source(self, src_ra, src_dec, **kwargs):
         """Minimize the negative log-Likelihood at source positions.
 
@@ -2687,6 +2719,9 @@ class StackingMultiPointSourceLLH(MultiPointSourceLLH):
         # Select events here already
         self._select_events(src_ra, src_dec, inject=inject, scramble=scramble, w_theo=self._w_theo)
         N = 1
+        start = time.clock()
+
+        
         Z = np.reshape([[-self.llh(nsources=x_i, gamma=y_i)[0]
                             for x_i in x1[::N]]
                             for y_i in x2[::N]],
@@ -2698,13 +2733,18 @@ class StackingMultiPointSourceLLH(MultiPointSourceLLH):
 
 
         min_ind = np.unravel_index(Z.argmin(), Z.shape)
+        
         x1_min = x1[::N][min_ind[1]]
         x2_min = x2[::N][min_ind[0]]
 
         
         self.par_seeds = np.array([x1_min, x2_min])
         fmin,xmin = super(StackingMultiPointSourceLLH, self).fit_source(src_ra, src_dec, **kwargs)
-        
+        stop = time.clock()
+        mins, secs = divmod(stop-start,60)
+        hours,mins = divmod(mins,60)
+        print("Minimizer only finished after {0:3d}h {1:2d}' {2:4.2f}''".format(int(hours),int(mins),secs))
+
         return fmin, xmin
 
 
