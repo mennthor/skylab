@@ -629,6 +629,7 @@ class StackingPointSourceInjector(PointSourceInjector):
 
     _sinDec_bins = 25
     _spl_effA = None
+    _order = 2
 
     mc = None
     mc_sel = None
@@ -657,7 +658,7 @@ class StackingPointSourceInjector(PointSourceInjector):
         # Get pdf of event distribution
         h, self.sinDec_bins = np.histogram(np.sin(trueDec), weights=w,
                                            range=self._sinDec_range,
-                                           bins=self.sinDec_bins, density=True)
+                                           bins=self._sinDec_bins, density=True)
         # Normalize by solid angle
         h /= np.diff(self.sinDec_bins)
         # Multiply histogram by event sum for event densitiy
@@ -665,7 +666,7 @@ class StackingPointSourceInjector(PointSourceInjector):
         # Interpolating spline. Attention: spline is in log(h)
         binmids = 0.5 * (self.sinDec_bins[:-1] + self.sinDec_bins[1:])
         self._spl_effA = scipy.interpolate.InterpolatedUnivariateSpline(
-            binmids, np.log(h), k=self.order)
+            binmids, np.log(h), k=self._order)
         return
 
     def _setup(self, src_dec):
