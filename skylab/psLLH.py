@@ -54,6 +54,19 @@ def trace(self, message, *args, **kwargs):
     if self.isEnabledFor(5):
         self._log(5, message, args, **kwargs)
 
+def csr_vappend(a,b):
+    r""" Takes in 2 csr_matrices and appends the second one to the bottom of the first one. 
+        Much faster than scipy.sparse.vstack but assumes the type to be csr and overwrites
+        the first matrix instead of copying it. The data, indices, and indptr still get copied.
+    """
+
+    a.data = np.hstack((a.data,b.data))
+    a.indices = np.hstack((a.indices,b.indices))
+    a.indptr = np.hstack((a.indptr,(b.indptr + a.nnz)[1:]))
+    a._shape = (a.shape[0]+b.shape[0],b.shape[1])
+    return a
+
+
 logging.addLevelName(5, "TRACE")
 logging.Logger.trace = trace
 
@@ -64,7 +77,7 @@ logger.addHandler(logging.StreamHandler())
 _aval = 1.e-3
 _b_eps = 0.9
 _beta_val = 0.5
-_delta_ang = np.radians(20.)
+_delta_ang = np.radians(25.)
 _eps = 5.e-3
 _ev = None
 _ev_S = np.nan
@@ -96,7 +109,7 @@ _src_dec = np.nan
 _src_ra = np.nan
 _seed = None
 _sindec_bins = np.linspace(-1., 1., 100. + 1)
-_thresh_S = 0.
+_thresh_S = 1.e-10#0.
 _ub_perc = 1.
 _win_points = 50
 
@@ -2302,15 +2315,38 @@ class StackingPointSourceLLH(PointSourceLLH):
 
         # calculate signal term
         if self.mode == 'all':
-            self._ev_S = sps.csr_matrix(np.array(self.llh_model.signal(src_ra, src_dec, self._ev),dtype=np.float32))
+            #do the estimation for in steps to save memory if the catalog is too large (slighlty more time consuming!)
+            step = 500
+            if N_src > step:
+                self._ev_S = sps.csr_matrix((0,len(self._ev)),dtype=np.float32)
+                for num in np.arange(N_src,step = step,dtype=int):
+                    _ev_S = sps.csr_matrix(self.llh_model.signal(src_ra[num:num+step], src_dec[num:num+step], self._ev), dtype=np.float32)
+                    #Eliminate events below a signal threshold
+                    mask = _ev_S.data > self._thresh_S
+                    _ev_S.data[~mask] = 0.
+                    _ev_S.eliminate_zeros()
+                    #append result
+                    self._ev_S = csr_vappend(self._ev_S,_ev_S)
+
+            else:
+                self._ev_S = sps.csr_matrix(self.llh_model.signal(src_ra, src_dec, self._ev),dtype=np.float32)
+
+
         elif self.mode in ['band', 'box']:
             ra = src_ra[indices]
             dec = src_dec[indices]
-            self._ev_S = sps.csr_matrix((np.array(self.llh_model.fast_signal(ra, dec, self._ev, ev_ind),dtype=np.float32), ev_ind, indptr))
+            self._ev_S = sps.csr_matrix(self.llh_model.fast_signal(ra, dec, self._ev, ev_ind), ev_ind, indptr, dtype=np.float32)
+
+
+        #Eliminate events below a signal threshold
+        mask = self._ev_S.data > self._thresh_S
+        self._ev_S.data[~mask] = 0.
+        self._ev_S.eliminate_zeros()
+
 
         # set number of selected events
         self._n = len(self._ev)
-
+        
         if self._n < 1:
             logger.error("No event was selected, fit will go to -infinity")
 
