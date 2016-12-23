@@ -77,7 +77,7 @@ logger.addHandler(logging.StreamHandler())
 _aval = 1.e-3
 _b_eps = 0.9
 _beta_val = 0.5
-_delta_ang = np.radians(25.)
+_delta_ang = np.radians(15.)
 _eps = 5.e-3
 _ev = None
 _ev_S = np.nan
@@ -2287,9 +2287,10 @@ class StackingPointSourceLLH(PointSourceLLH):
             cosFact = np.amin(np.cos([min_dec, max_dec]),axis=0)
             dPhi = np.amin([np.repeat(2. * np.pi,N_src), 2. * self.delta_ang / cosFact],axis=0)
             #calculate ra_dist only for events that are still in exp_mask
-            mask_ra = np.fabs(np.fmod(self._ev["ra"][ev_ind] - src_ra[indices] + np.pi, 2. * np.pi)
+            mask_ra = np.fabs(np.fmod(np.fabs(self._ev["ra"][ev_ind] - src_ra[indices]) + np.pi, 2. * np.pi)
                              - np.pi)
 
+            print(np.min(mask_ra),np.max(mask_ra))
             #right ascension mask
             mask_ra = (mask_ra < (dPhi[indices]/2.))|(self._ev['sigma'][ev_ind] > np.radians(3.))
             #box mask
@@ -2335,7 +2336,7 @@ class StackingPointSourceLLH(PointSourceLLH):
         elif self.mode in ['band', 'box']:
             ra = src_ra[indices]
             dec = src_dec[indices]
-            self._ev_S = sps.csr_matrix(self.llh_model.fast_signal(ra, dec, self._ev, ev_ind), ev_ind, indptr, dtype=np.float32)
+            self._ev_S = sps.csr_matrix((self.llh_model.fast_signal(ra, dec, self._ev, ev_ind), ev_ind, indptr),dtype=np.float32)
 
 
         #Eliminate events below a signal threshold
