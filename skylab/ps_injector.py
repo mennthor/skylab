@@ -658,7 +658,8 @@ class StackingPointSourceInjector(PointSourceInjector):
         # Get pdf of event distribution
         h, self.sinDec_bins = np.histogram(np.sin(trueDec), weights=w,
                                            range=self._sinDec_range,
-                                           bins=self._sinDec_bins, density=True)
+                                           bins=self._sinDec_bins,
+                                           density=True)
         # Normalize by solid angle
         h /= np.diff(self.sinDec_bins)
         # Multiply histogram by event sum for event densitiy
@@ -702,13 +703,14 @@ class StackingPointSourceInjector(PointSourceInjector):
                                          ("trueE", np.float),
                                          ("ow", np.float)])
 
-        # Init class dict to store selected events per source. Might be a
-        # better way to do this...
+        # Init class dict to store selected events per source. First only copy
+        # primary MC sample structure.
+        # Structure is: 1. MC Sample, 2. Source Index, 3. MC array per source
         self.mc_sel = {}
         for key in self.mc.iterkeys():
             self.mc_sel[key] = {}
 
-        # For every source select events in source's declination band,
+        # For every source j select events in source's declination band,
         # calculated in `_setup()`, from every MC sample in given dict.
         print(67 * "-" + "\nStackingLLHInjector fill() info:")
         for j, (omega, min_dec, max_dec) in enumerate(zip(
@@ -718,7 +720,7 @@ class StackingPointSourceInjector(PointSourceInjector):
                 np.rad2deg(min_dec), np.rad2deg(max_dec)))
             print("    E   : {:7.2f} and {:7.2f} in {:7.2f} GeV".format(
                 self.e_range[0], self.e_range[1], self.GeV))
-
+            # Now iterate over all MC samples and select events for the src j
             for key, mc_i in self.mc.iteritems():
                 # Get MC event's in the selected energy and sinDec range for
                 # the current source
@@ -740,9 +742,11 @@ class StackingPointSourceInjector(PointSourceInjector):
                 # Append all selected events to a single record array
                 N = np.count_nonzero(band_mask)
                 mc_arr = np.empty(N, dtype=self.mc_arr.dtype)
+                # idx, enum, src_enum identifies each event uniquely
                 mc_arr["idx"] = np.arange(N)
                 mc_arr["enum"] = key * np.ones(N)
                 mc_arr["src_enum"] = j * np.ones(N)
+                # Scale each OW to its corresponding livetime for the sample
                 mc_arr["ow"] = (self.mc_sel[key][j]["ow"] *
                                 self.livetime[key] * 86400.)
                 mc_arr["trueE"] = self.mc_sel[key][j]["trueE"]
@@ -759,7 +763,7 @@ class StackingPointSourceInjector(PointSourceInjector):
         print("Selected {0:d} events in total".format(len(self.mc_arr)))
 
         # Update event and src weights for current selection
-        self._weights()
+        self._weights(src_dec)
 
         return
 
@@ -771,8 +775,8 @@ class StackingPointSourceInjector(PointSourceInjector):
         self._src_norm_w = src_norm_w / np.sum(src_norm_w)
 
         # Init for loop below
-        self._raw_flux_per_src = np.zeros(len(self._src), dtpye=np.float)
-        self._norm_w = np.zeros(len(self.mc_arr), dtpye=np.float)
+        self._raw_flux_per_src = np.zeros(len(self._src), dtype=np.float)
+        self._norm_w = np.zeros(len(self.mc_arr), dtype=np.float)
 
         # Loop over all selected events per src and calc the raw_flux per src
         for src_idx in np.unique(self.mc_arr["src_enum"]):
@@ -843,6 +847,16 @@ class StackingPointSourceInjector(PointSourceInjector):
         self.mc = mc
         self.livetime = livetime
 
+        # Just print some info about MC input and check if sinDec is available
+        print("MC input info:")
+        for key in self.mc.iterkeys():
+            print("  Sample {}: {} events with livetime {} d.".format(
+                key, len(mc[key]), livetime[key]))
+            if "sinDec" not in self.mc[key].dtype.fields:
+                self.mc[key] = np.lib.recfunctions.append_fields(
+                    self.mc[key], "sinDec", np.sin(self.mc[key]["dec"]),
+                    dtypes=np.float, usemask=False)
+
         # Set sources
         if (("ra" not in src_array.dtype.names) or
                 ("dec" not in src_array.dtype.names) or
@@ -905,10 +919,10 @@ class StackingPointSourceInjector(PointSourceInjector):
                 continue
 
             # If we have src priors, sample new src positions from each prior
-            if self.src_priors is not None:
-                src_idx = []
-                for prior in self.src_priors:
-                    src_idx += [amp_hp.healpy_rejection_sampler(prior, n=1)]
+            if self._src_priors is not None:
+                src_idx = np.zeros(len(self._src_priors), dtype=int) - 1
+                for i, prior in enumerate(self._src_priors):
+                    src_idx[i] = amp_hp.healpy_rejection_sampler(prior, n=1)[0]
                 # Get equatorial coordinates for the new src positions
                 src_th, src_phi = hp.pix2ang(self._NSIDE, src_idx)
                 src_dec, src_ra = amp_hp.ThetaPhiToDecRa(src_th, src_phi)
@@ -916,8 +930,8 @@ class StackingPointSourceInjector(PointSourceInjector):
                 src_ra = np.atleast_1d(src_ra)
             else:
                 # Otherwise use static given src positions for each trial
-                src_ra = self.src["ra"]
-                src_dec = self.src["dec"]
+                src_ra = self._src["ra"]
+                src_dec = self._src["dec"]
 
             # Now setup dec bands and select events for the new src positions
             self._setup(src_dec)
@@ -925,22 +939,52 @@ class StackingPointSourceInjector(PointSourceInjector):
 
             # Sample num events from all selected events with the global weight
             sam_idx = self.random.choice(self.mc_arr, size=num, p=self._norm_w)
+            self.sam = sam_idx
 
-            # Get the events that were sampled from the selected events MC dict
+            # Get the sample ids from the different MCs that were selected
             enums = np.unique(sam_idx["enum"])
 
+            # Only one sample selected or given (-1), just return recarray
             if len(enums) == 1 and enums[0] < 0:
-                # Only one sample, just return recarray
-                sam_ev = np.copy(self.mc_sel[enums[0]][sam_idx["idx"]])
+                # For the sample, get the source keys from which events were
+                # selected
+                _src_keys = self.mc_sel[enums[0]].keys()
+                # Append events from all srcs where events were selected
+                _sam_ev = []
+                for i in _src_keys:
+                    idx = sam_idx[sam_idx["src_enum"] == i]["idx"]
+                    if len(idx) == 0:
+                        continue
+                    _sam_ev.append(rotate_struct(
+                        self.mc_sel[enums[0]][i][idx], src_ra[i], src_dec[i]))
 
-                yield num, rotate_struct(sam_ev, src_ra, self.src_dec)
+                # Concat split src arrays to single output array
+                sam_ev = np.array([], dtype=_sam_ev[0].dtype)
+                for _sam_ev_i in _sam_ev:
+                    sam_ev = np.append(sam_ev, _sam_ev_i)
+
+                yield num, sam_ev, src_ra, src_dec
                 continue
 
             # Otherwise return samples in dict with MC key they belong to
             sam_ev = dict()
             for enum in enums:
-                idx = sam_idx[sam_idx["enum"] == enum]["idx"]
-                sam_ev_i = np.copy(self.mc_sel[enum][idx])
-                sam_ev[enum] = rotate_struct(sam_ev_i, src_ra, self.src_dec)
+                _src_keys = self.mc_sel[enum].keys()
+                # For each sample get MC from every src selected
+                _sam_ev = []
+                for i in _src_keys:
+                    enum_mask = (sam_idx["enum"] == enum)
+                    src_mask = (sam_idx[enum_mask]["src_enum"] == i)
+                    idx = sam_idx[enum_mask][src_mask]["idx"]
+                    if len(idx) == 0:
+                        continue
+                    _sam_ev.append(rotate_struct(
+                        self.mc_sel[enum][i][idx], src_ra[i], src_dec[i]))
+
+                # Concat split src arrays to single output array per sample
+                sam_ev_i = np.array([], dtype=_sam_ev[0].dtype)
+                for _sam_ev_i in _sam_ev:
+                    sam_ev_i = np.append(sam_ev_i, _sam_ev_i)
+                sam_ev[enum] = sam_ev_i
 
             yield num, sam_ev
