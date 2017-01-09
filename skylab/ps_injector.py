@@ -903,8 +903,9 @@ class StackingPointSourceInjector(PointSourceInjector):
 
         return
 
-    def sample(self, src_ra, mean_mu, poisson=True):
-        """External src_ra not needed but kept for usability in psLLH.py"""
+    def sample(self, src_ra, mean_mu, poisson=True, ret_src_dir=False):
+        """External src_ra not needed but kept for usability in psLLH.py
+        ret_src_dir is for testing only and returns src ras/decs per trial."""
         # Generate event numbers using poissonian events
         while True:
             num = (self.random.poisson(mean_mu)
@@ -963,7 +964,10 @@ class StackingPointSourceInjector(PointSourceInjector):
                 for _sam_ev_i in _sam_ev:
                     sam_ev = np.append(sam_ev, _sam_ev_i)
 
-                yield num, sam_ev, src_ra, src_dec
+                if ret_src_dir:
+                    yield num, sam_ev, src_ra, src_dec
+                else:
+                    yield num, sam_ev
                 continue
 
             # Otherwise return samples in dict with MC key they belong to
@@ -987,4 +991,7 @@ class StackingPointSourceInjector(PointSourceInjector):
                     sam_ev_i = np.append(sam_ev_i, _sam_ev_i)
                 sam_ev[enum] = sam_ev_i
 
-            yield num, sam_ev
+            if ret_src_dir:
+                yield num, sam_ev, src_ra, src_dec
+            else:
+                yield num, sam_ev
