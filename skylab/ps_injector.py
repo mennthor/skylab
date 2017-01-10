@@ -666,6 +666,13 @@ class StackingPointSourceInjector(PointSourceInjector):
         h *= np.sum(w)
         # Interpolating spline. Attention: spline is in log(h)
         binmids = 0.5 * (self.sinDec_bins[:-1] + self.sinDec_bins[1:])
+
+        # NaN handling
+        y = np.log(h)
+        w = np.isfinite(y)
+        y = y[w]
+        binmids = binmids[w]
+
         self._spl_effA = scipy.interpolate.InterpolatedUnivariateSpline(
             binmids, np.log(h), k=self._order)
         return
@@ -823,14 +830,14 @@ class StackingPointSourceInjector(PointSourceInjector):
         return
 
     # Public methods
-    def effA(self, src_decs):
+    def effA(self, dec):
         if self._spl_effA is None:
             raise ValueError("Need to fill() with MC before effA calculation.")
-        """Vectorized version for multiple src_decs"""
-        src_decs = np.atleast_1d(src_decs)
-        effA = self._spl_effA(np.sin(src_decs))
-        invalid = ((np.sin(src_decs) < self.sinDec_bins[0]) |
-                   (np.sin(src_decs) > self.sinDec_bins[-1]))
+        """Vectorized version for multiple dec"""
+        dec = np.atleast_1d(dec)
+        effA = self._spl_effA(np.sin(dec))
+        invalid = ((np.sin(dec) < self.sinDec_bins[0]) |
+                   (np.sin(dec) > self.sinDec_bins[-1]))
         effA[invalid] = 0.
         return effA
 
