@@ -241,8 +241,15 @@ class ClassicLLH(NullModel):
         # multiply histogram by event sum for event densitiy
         h *= w.sum()
 
+        # NaN handling
+        y = np.log(h)
+        w = np.isfinite(y)
+        y = y[w]
+        mids = 0.5 * (bins[1:] + bins[:-1])
+        mids = mids[w]
+
         self._spl_effA = scipy.interpolate.InterpolatedUnivariateSpline(
-                (bins[1:] + bins[:-1]) / 2., np.log(h), k=self.order)
+            mids, y, k=self.order)
 
         return
 
