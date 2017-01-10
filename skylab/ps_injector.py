@@ -674,7 +674,7 @@ class StackingPointSourceInjector(PointSourceInjector):
         binmids = binmids[w]
 
         self._spl_effA = scipy.interpolate.InterpolatedUnivariateSpline(
-            binmids, np.log(h), k=self._order)
+            binmids, y, k=self._order)
         return
 
     def _setup(self, src_dec):
