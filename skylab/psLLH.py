@@ -2192,6 +2192,9 @@ class StackingPointSourceLLH(PointSourceLLH):
         if kwargs:
             raise ValueError("Don't know arguments", kwargs.keys())
 
+        # reset
+        self.reset()
+
         # Set the src weights and double check if a src array is given
         if self._src is not None:
             _src_w = self._src["src_w"]
@@ -2200,13 +2203,23 @@ class StackingPointSourceLLH(PointSourceLLH):
                              " or mutliple src locations.")
 
         # Update src position if given, eg. from trial runs with src priors
-        # Else the src position are the fixed ones from the set src array
-        if src_ra is not None and src_dec is not None:
-            _src_ra = np.atleast_1d(self._src_ra)
-            _src_dec = np.atleast_1d(self._src_dec)
+        if src_ra is None:
+            # If None given, use src pos from the fixed pos from set src array
+            if src_dec is not None:
+                raise ValueError("If src_ra is None, src_dec must be too.")
+            _src_ra = self.src["ra"]
+            _src_dec = self.src["dec"]
+        else:
+            self._check_coords(src_ra, src_dec)
+            _src_ra = np.atleast_1d(src_ra)
+            _src_dec = np.atleast_1d(src_dec)
+            if len(_src_w) != len(_src_ra):
+                raise ValueError(
+                    "Number of srcs must be same as in given src array.")
 
-        # reset
-        self.reset()
+        # Update internal positions
+        self._src_ra = _src_ra
+        self._src_dec = _src_dec
 
         # number of total events
         self._N = len(self.exp)
@@ -2214,7 +2227,7 @@ class StackingPointSourceLLH(PointSourceLLH):
         # Selection all or declinations bands
         if self.mode == "all":
             # All events are selected
-            exp_mask = np.ones_like(self.exp["sinDec"], dtype=np.bool)
+            exp_mask = np.ones(self._N, dtype=np.bool)
         elif self.mode in ["band", "box"]:
             # StackingLLH: Loop over all given src positions and select events.
             # First make sure we're working with arrays.
@@ -2222,15 +2235,15 @@ class StackingPointSourceLLH(PointSourceLLH):
             max_decs = []
             # Save dec mask per src for use in 'box' mode
             dec_mask = []
-            exp_mask = np.zeros_like(self.exp["sinDec"], dtype=np.bool)
+            exp_mask = np.zeros(self._N, dtype=np.bool)
             for src_ra, src_dec in zip(_src_ra, _src_dec):
                 # Get the zenith band with correct boundaries for current src
                 min_dec = max(-np.pi / 2., src_dec - self.delta_ang)
                 max_dec = min(np.pi / 2., src_dec + self.delta_ang)
 
                 # Save for use in box mode
-                min_decs += [min_dec]
-                max_decs += [max_dec]
+                min_decs.append(min_dec)
+                max_decs.append(max_dec)
 
                 dPhi = 2. * np.pi
 
@@ -2238,16 +2251,17 @@ class StackingPointSourceLLH(PointSourceLLH):
                 mask = ((self.exp["sinDec"] > np.sin(min_dec)) &
                         (self.exp["sinDec"] < np.sin(max_dec)))
                 # Update incremental and total dec mask
-                dec_mask += [mask]
+                dec_mask.append(mask)
                 exp_mask = exp_mask | mask
         else:
             raise ValueError("Not supported mode: {0:s}".format(self.mode))
 
+        _ra = self.exp["ra"]
+
         # Update rightascension information for scrambled events.
         # Use total dec mask to only generate as much as needed.
-        _ra = self.exp["ra"]
         if scramble and not self.fix:
-            # Init with -1
+            # Init with -1 those are thrown away anyway
             _ra = np.zeros_like(self.exp["sinDec"]) - 1.
             _ra[exp_mask] = self.random.uniform(0., 2. * np.pi,
                                                 size=np.sum(exp_mask))
@@ -2272,6 +2286,7 @@ class StackingPointSourceLLH(PointSourceLLH):
 
         # Update the event selection and background probability
         self._ev = self.exp[exp_mask]
+        self._ev["ra"] = _ra[exp_mask]
 
         if inject is not None:
             self._ev = np.append(self._ev,
