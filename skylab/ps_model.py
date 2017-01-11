@@ -896,7 +896,7 @@ class StackingPointSourceLLH(ClassicLLH):
         return
 
     def _norm_src_weights(self, src_decs, src_w):
-        src_dec_w = self.effA(src_decs)[0]
+        src_dec_w = self.effA(src_decs)
         src_norm_w = src_dec_w * src_w
         return src_norm_w / np.sum(src_norm_w)
 
@@ -908,7 +908,7 @@ class StackingPointSourceLLH(ClassicLLH):
                    (np.sin(src_decs) > self.sinDec_bins[-1]))
         effA[invalid] = 0.
 
-        return effA, None
+        return effA
 
     def signal(self, src_ra, src_dec, src_w, ev):
         # Get src weights, multiply with detector weights and normalize
