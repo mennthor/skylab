@@ -2171,6 +2171,13 @@ class StackingPointSourceLLH(PointSourceLLH):
         return sout
 
     # INTERNAL METHODS
+    def _check_coords(self, dec, ra):
+        if np.any(ra < 0) or np.any(ra > 2 * np.pi):
+            raise ValueError("RA value(s) not valid equatorial coordinates")
+        if (np.any(dec < -np.pi / 2.) or np.any(dec > +np.pi / 2.)):
+            raise ValueError("DEC value(s) not valid equatorial coordinates")
+        return
+
     def _select_events(self, src_ra=None, src_dec=None, **kwargs):
         """Use coordinates src_ra, src_dec if given, otherwise use fixed
         coordinates from src array which must be given.
@@ -2332,10 +2339,7 @@ class StackingPointSourceLLH(PointSourceLLH):
         src_w = np.atleast_1d(src_w)
 
         # Check if coordinates are valid equatorial coordinates in radians
-        if np.any(src_ra < 0) or np.any(src_ra > 2 * np.pi):
-            raise ValueError("RA value(s) not valid equatorial coordinates")
-        if (np.any(src_dec < -np.pi / 2.) or np.any(src_dec > +np.pi / 2.)):
-            raise ValueError("DEC value(s) not valid equatorial coordinates")
+        self._check_coords(src_dec, src_ra)
 
         # Zero or smaller weights make no sense
         if np.any(src_w <= 0):
@@ -2358,7 +2362,8 @@ class StackingPointSourceLLH(PointSourceLLH):
         return
 
     # PUBLIC methods
-    def fit_source(self, src_ra=np.nan, src_dec=np.nan, **kwargs):
+    def fit_source(self, src_ra, src_dec, **kwargs):
+
         return super(StackingPointSourceLLH, self).fit_source(
             src_ra, src_dec, kwargs)
 
