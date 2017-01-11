@@ -2171,22 +2171,28 @@ class StackingPointSourceLLH(PointSourceLLH):
         return sout
 
     # INTERNAL METHODS
-    def _select_events(self, src_ra, src_dec, **kwargs):
+    def _select_events(self, src_ra=None, src_dec=None, **kwargs):
+        """Use coordinates src_ra, src_dec if given, otherwise use fixed
+        coordinates from src array which must be given.
+        Theoretical src weights are always by the given src array.
+        """
         scramble = kwargs.pop("scramble", False)
         inject = kwargs.pop("inject", None)
         if kwargs:
             raise ValueError("Don't know arguments", kwargs.keys())
 
-        _src_ra = np.atleast_1d(src_ra)
-        _src_dec = np.atleast_1d(src_dec)
-
+        # Set the src weights and double check if a src array is given
         if self._src is not None:
-            _src_ra = self._src["ra"]
-            _src_dec = self._src["dec"]
             _src_w = self._src["src_w"]
         else:
             raise ValueError("src list is None. Use `set_srcs()` to give one" +
                              " or mutliple src locations.")
+
+        # Update src position if given, eg. from trial runs with src priors
+        # Else the src position are the fixed ones from the set src array
+        if src_ra is not None and src_dec is not None:
+            _src_ra = np.atleast_1d(self._src_ra)
+            _src_dec = np.atleast_1d(self._src_dec)
 
         # reset
         self.reset()
@@ -2255,9 +2261,6 @@ class StackingPointSourceLLH(PointSourceLLH):
 
         # Update the event selection and background probability
         self._ev = self.exp[exp_mask]
-
-        self._src_ra = _src_ra
-        self._src_dec = _src_dec
 
         if inject is not None:
             self._ev = np.append(self._ev,
@@ -2348,13 +2351,16 @@ class StackingPointSourceLLH(PointSourceLLH):
         self._src["dec"] = src_dec
         self._src["src_w"] = src_w
 
+        # Save src position for event selection
+        self._src_ra = src_ra
+        self._src_dec = src_dec
+
         return
 
     # PUBLIC methods
     def fit_source(self, src_ra=np.nan, src_dec=np.nan, **kwargs):
-        raise NotImplementedError(
-            "`fit_source` is on the TODO list.")
-        return
+        return super(StackingPointSourceLLH, self).fit_source(
+            src_ra, src_dec, kwargs)
 
     def do_trials(self, src_ra=np.nan, src_dec=np.nan, **kwargs):
         raise NotImplementedError(
