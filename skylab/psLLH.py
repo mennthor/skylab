@@ -2382,10 +2382,86 @@ class StackingPointSourceLLH(PointSourceLLH):
 
     # PUBLIC methods
     def fit_source(self, src_ra, src_dec, **kwargs):
+        def _llh(x, *args):
+            # Select events with given src pos. or with internal position
+            # for every call. If srcs are fixed, nothing changes compared
+            # to the original function. The event selection is the
+            # incorporation variable src positions in the fit.
+            self._select_events(src_ra, src_dec,
+                                inject=inject, scramble=scramble)
+
+            fit_pars = dict([(par, xi) for par, xi in zip(self.params, x)])
+            fun, grad = self.llh(**fit_pars)
+
+            # Return negative log-llh value needed for minimization
+            return -fun, -grad
+
         if src_ra is not None and src_dec is not None:
             self._check_coords(src_ra, src_dec)
-        return super(StackingPointSourceLLH, self).fit_source(
-            src_ra, src_dec, **kwargs)
+
+        scramble = kwargs.pop("scramble", False)
+        inject = kwargs.pop("inject", None)
+        kwargs.setdefault("pgtol", _pgtol)
+
+        # Set all weights once for this src location, if not already cached
+        # self._select_events(src_ra, src_dec, inject=inject, scramble=scramble)
+
+        # if self._N < 1:
+        #     # No events selected
+        #     return 0., dict([(par, par_s) if not par == "nsources" else (par, 0.)
+        #                      for par, par_s in zip(self.params, self.par_seeds)])
+
+        # get seeds
+        pars = self.par_seeds
+        inds = [i for i, par in enumerate(self.params) if par in kwargs]
+        pars[inds] = np.array([kwargs.pop(par) for par in self.params
+                                               if par in kwargs])
+
+        # minimizer setup
+        xmin, fmin, min_dict = scipy.optimize.fmin_l_bfgs_b(
+                                _llh, pars,
+                                bounds=self.par_bounds,
+                                **kwargs)
+
+        # set up mindict to enter while, exit if fit looks nice
+        i = 1
+        while min_dict["warnflag"] == 2 and "FACTR" in min_dict["task"]:
+            if i > 100:
+                raise RuntimeError("Did not manage good fit")
+
+            pars[0] = self.random.uniform(0., 2. * pars[0])
+
+            # no stop due to gradient
+            xmin, fmin, min_dict = scipy.optimize.fmin_l_bfgs_b(
+                                    _llh, pars,
+                                    bounds=self.par_bounds,
+                                    **kwargs)
+
+            i += 1
+
+        if fmin > 0 and (self.par_bounds[0][0] <= 0
+                         and self.par_bounds[0][1] >= 0):
+            # null hypothesis is part of minimisation, fit should be negative
+            if abs(fmin) > kwargs["pgtol"]:
+                # SPAM only if the distance is large
+                logger.error("Fitter returned positive value, "
+                             "force to be zero at null-hypothesis. "
+                             "Minimum found {0} with fmin {1}".format(
+                                 xmin, fmin))
+            fmin = 0
+            xmin[0] = 0.
+
+        if self._N > 0 and abs(xmin[0]) > _rho_max * self._n:
+            logger.error(("nsources > {0:7.2%} * {1:6d} selected events, "
+                          "fit-value nsources = {2:8.1f}").format(
+                              _rho_max, self._n, xmin[0]))
+
+        xmin = dict([(par, xi) for par, xi in zip(self.params, xmin)])
+
+        # Separate over and underfluctuations
+        fmin *= -np.sign(xmin["nsources"])
+
+        return fmin, xmin
 
     def do_trials(self, src_ra=np.nan, src_dec=np.nan, **kwargs):
         raise NotImplementedError(
