@@ -912,7 +912,8 @@ class StackingPointSourceInjector(PointSourceInjector):
 
     def sample(self, src_ra, mean_mu, poisson=True, ret_src_dir=False):
         """External src_ra not needed but kept for usability in psLLH.py
-        ret_src_dir is for testing only and returns src ras/decs per trial."""
+        If ret_src_dir is true, it returns src ras/decs per trial. This is
+        needed for BG trials, if the src positions are fitted too."""
         # Generate event numbers using poissonian events
         while True:
             num = (self.random.poisson(mean_mu)
