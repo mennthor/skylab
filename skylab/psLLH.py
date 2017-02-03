@@ -45,7 +45,8 @@ from . import ps_model
 from . import utils
 
 # StackingLLH
-import healpy as hp
+# import healpy as hp
+
 
 # get module logger
 def trace(self, message, *args, **kwargs):
@@ -2387,8 +2388,13 @@ class StackingPointSourceLLH(PointSourceLLH):
             # for every call. If srcs are fixed, nothing changes compared
             # to the original function. The event selection is the
             # incorporation variable src positions in the fit.
-            self._select_events(src_ra, src_dec,
-                                inject=inject, scramble=scramble)
+            if _fit_src:
+                # Extract current fit positions, select the correct events and
+                # calculate the signal term at the new positions
+                cur_ra = x[-2 * self._nsrcs:-self._nsrcs]
+                cur_dec = x[-self._nsrcs:]
+                self._select_events(cur_ra, cur_dec,
+                                    inject=inject, scramble=scramble)
 
             fit_pars = dict([(par, xi) for par, xi in zip(self.params, x)])
             fun, grad = self.llh(**fit_pars)
@@ -2396,32 +2402,47 @@ class StackingPointSourceLLH(PointSourceLLH):
             # Return negative log-llh value needed for minimization
             return -fun, -grad
 
-        if src_ra is not None and src_dec is not None:
-            self._check_coords(src_ra, src_dec)
-
         scramble = kwargs.pop("scramble", False)
         inject = kwargs.pop("inject", None)
         kwargs.setdefault("pgtol", _pgtol)
 
-        # Set all weights once for this src location, if not already cached
-        # self._select_events(src_ra, src_dec, inject=inject, scramble=scramble)
-
-        # if self._N < 1:
-        #     # No events selected
-        #     return 0., dict([(par, par_s) if not par == "nsources" else (par, 0.)
-        #                      for par, par_s in zip(self.params, self.par_seeds)])
+        # Set all weights once for this src location, if not already cached,
+        # only if src_ra, src_dec positions are. Otherwise they are fitted.
+        _fit_src = False
+        if src_ra is not None and src_dec is not None:
+            self._check_coords(src_ra, src_dec)
+            self._select_events(
+                src_ra, src_dec, inject=inject, scramble=scramble)
+            if self._N < 1:
+                # No events selected
+                return 0., dict(
+                    [(par, par_s) if not par == "nsources" else (par, 0.)
+                        for par, par_s in zip(self.params, self.par_seeds)])
+        else:  # Else fit source positions in the LLH fit if priors are given
+            if self.src_priors is not None:
+                _fit_src = True
+            else:
+                raise ValueError("If no priors are given, srcs can't be fit.")
 
         # get seeds
         pars = self.par_seeds
         inds = [i for i, par in enumerate(self.params) if par in kwargs]
-        pars[inds] = np.array([kwargs.pop(par) for par in self.params
-                                               if par in kwargs])
+        pars[inds] = np.array(
+            [kwargs.pop(par) for par in self.params if par in kwargs])
+
+        # Set up src positions as fit params, seeding with given values.
+        # Src positions are appended after all other params
+        par_bounds = np.atleast_2d(self.bounds)
+        if _fit_src:
+            pars = np.concatenate(pars, self._src_ra, self._src_dec)
+            # Append coordinate bounds for positions
+            ra_bounds = np.array([self._nsrcs * [0, 2 * np.pi]])
+            dec_bounds = np.array([self._nsrcs * [-np.pi / 2., np.pi / 2.]])
+            par_bounds = np.concatenate(par_bounds, ra_bounds, dec_bounds)
 
         # minimizer setup
         xmin, fmin, min_dict = scipy.optimize.fmin_l_bfgs_b(
-                                _llh, pars,
-                                bounds=self.par_bounds,
-                                **kwargs)
+            _llh, pars, bounds=par_bounds, **kwargs)
 
         # set up mindict to enter while, exit if fit looks nice
         i = 1
@@ -2433,14 +2454,11 @@ class StackingPointSourceLLH(PointSourceLLH):
 
             # no stop due to gradient
             xmin, fmin, min_dict = scipy.optimize.fmin_l_bfgs_b(
-                                    _llh, pars,
-                                    bounds=self.par_bounds,
-                                    **kwargs)
+                _llh, pars, bounds=par_bounds, **kwargs)
 
             i += 1
 
-        if fmin > 0 and (self.par_bounds[0][0] <= 0
-                         and self.par_bounds[0][1] >= 0):
+        if fmin > 0 and (par_bounds[0][0] <= 0 and par_bounds[0][1] >= 0):
             # null hypothesis is part of minimisation, fit should be negative
             if abs(fmin) > kwargs["pgtol"]:
                 # SPAM only if the distance is large
