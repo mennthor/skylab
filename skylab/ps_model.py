@@ -885,34 +885,156 @@ class EnergyLLHfixed(EnergyLLH):
 # StackingPointSourceLLH
 ############################################################################
 class StackingPointSourceLLH(ClassicLLH):
+    def __call__(self, exp, mc, livetime, **kwargs):
+        """
+        Call function to build the src detector weight spline from reweighted
+        simulation data first, then call super function.
+
+        Also saves MC and livetime reference as a class variable to be able to
+        calculate the per src detector weight from reweighted simulation data
+        when the spectral index gets changed.
+
+        Parameters
+        ----------
+        exp : record array
+            Experimental data.
+        mc : record array
+            Simulation data with additional truth information.
+        livetime : float
+            Livetime in days of the simulation sample.
+        """
+        self.mc = mc
+        self._src_dec_weight_spline(self.mc)
+
+        super(StackingPointSourceLLH, self).__call__(
+            exp, self.mc, livetime, **kwargs)
+
+        return
+
+    # Private functions
+    def _src_dec_weight_spline(self, mc):
+        """
+        Build spline to calculate the per src detector weight dependend on
+        its declination from reweighting simulation with a power law with
+        given spectral index gamma.
+
+        The true declination is histogrammed with sinDec_bins and weighted
+        with powerlaw weights calculated from true energy, oneweight (ow) and
+        the given spectral index gamma.
+        Then an interpolating spline `_spl_src_dec_weights` is fitted through
+        the bin mids from which the detector efficiency at that declination
+        can be read off.
+        The histogram is build in sin(dec) to account for being on sphere,
+        taking declination dependent solid angles into account.
+
+        Parameters
+        ----------
+        mc : record array
+            Simulation data. Needed fields: 'ow', 'trueE', 'trueDec'.
+        """
+        # Powerlaw weights from NuGen simulation's OneWeight. The livetime is
+        # not needed, because only one smaple is used.
+        w = mc["ow"] * mc["trueE"]**(-self.gamma)
+
+        # Get event distribution dependent on declination. This is already
+        # properly normalized to area by the `density` keyword
+        h, bins = np.histogram(np.sin(mc["trueDec"]), weights=w,
+                               bins=self.sinDec_bins, density=True)
+
+        # Make interpolating spline through bin mids of histogram
+        mids = 0.5 * (bins[1:] + bins[:-1])
+        self._spl_src_dec_weights = \
+            scipy.interpolate.InterpolatedUnivariateSpline(
+                mids, h, k=self.order)
+
+        return
+
+    def _total_src_weights(self, src_dec, src_w):
+        """
+        Calculate one normed weight per src combining detector and intrinsic
+        weight: normed_weight = (src_dec_w * src_w) / sum(src_dec_w * src_w)
+
+        Parameters
+        ----------
+        src_dec : array
+            Declinations of the src positions in radian: [-pi/2, pi/2].
+        src_w : array
+            Intrinsic weight of the srcs, giving eg. information from
+            theory or other a-priori information.
+
+        Returns
+        -------
+        normed_weights : array
+            One normed weight per given src.
+        """
+        src_dec_w = self.src_dec_weights(src_dec)
+        src_norm_w = src_dec_w * src_w
+
+        return src_norm_w / np.sum(src_norm_w)
+
+    # Properties
     @property
     def gamma(self):
         return self._gamma
 
     @gamma.setter
     def gamma(self, val):
+        # Use new gamma to recalculate src detector weights. Other parent
+        # function might need a new `__call__` to adopt the new `gamma`.
         self._gamma = float(val)
-        print("Need to __call__ to set correct effA for the new gamma.")
+        self._src_dec_weight_spline(self.mc)
         return
 
-    def _norm_src_weights(self, src_decs, src_w):
-        src_dec_w = self.effA(src_decs)
-        src_norm_w = src_dec_w * src_w
-        return src_norm_w / np.sum(src_norm_w)
+    # Public functions
+    def src_dec_weights(self, src_dec, **params):
+        """
+        Calculates src detector weights from the precaluclated src weight
+        spline for given declinations `src_dec`. This is dependent on the
+        set vale for the spectral index `gamma`.
 
-    def effA(self, src_decs, **params):
-        """Vectorized version for multiple src_decs"""
-        src_decs = np.atleast_1d(src_decs)
-        effA = self._spl_effA(np.sin(src_decs))
-        invalid = ((np.sin(src_decs) < self.sinDec_bins[0]) |
-                   (np.sin(src_decs) > self.sinDec_bins[-1]))
-        effA[invalid] = 0.
+        Parameters
+        ----------
+        src_dec : array
+            Array of src declinations in radian: [-pi/2, pi/2]
 
-        return effA
+        Returns
+        -------
+        src_dec_w : array
+            Weights for each given src declination. For declinations outside
+            `sinDec_range` the weights are set to zero.
+        """
+        src_dec = np.atleast_1d(src_dec)
+        src_dec_w = self._spl_src_dec_weights(np.sin(src_dec))
+        invalid = ((np.sin(src_dec) < self.sinDec_range[0]) |
+                   (np.sin(src_dec) > self.sinDec_range[1]))
+        src_dec_w[invalid] = 0.
+
+        return src_dec_w
 
     def signal(self, src_ra, src_dec, src_w, ev):
+        """
+        Stacking signal function.
+
+        Stacking is achieved by adding weighted signal values from each given
+        src position for each event.
+
+        Parameters
+        ----------
+        src_ra : array
+            Right-ascension of given srcs in radian: [0, 2pi].
+        src_ra : array
+            Declination of given srcs in radian: [-pi/2, pi/2].
+        src_w : array
+            Intrinsic weight of the srcs, giving eg. information from
+            theory or other a-priori information.
+
+        Returns
+        -------
+        S : array
+            Stacked signal value for each event used in the likelihood.
+        """
         # Get src weights, multiply with detector weights and normalize
-        src_norm_w = self._norm_src_weights(src_dec, src_w)
+        src_norm_w = self._total_src_weights(src_dec, src_w)
 
         # Create Signal for every src position with normalized weights
         S = np.zeros((len(src_ra), len(ev)), dtype=np.float)
