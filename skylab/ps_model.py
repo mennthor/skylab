@@ -911,7 +911,7 @@ class StackingPointSourceLLH(ClassicLLH):
 
         return
 
-    # Private functions
+    # Private methods
     def _src_dec_weight_spline(self, mc):
         """
         Build spline to calculate the per src detector weight dependend on
@@ -985,7 +985,7 @@ class StackingPointSourceLLH(ClassicLLH):
         self._src_dec_weight_spline(self.mc)
         return
 
-    # Public functions
+    # Public methods
     def src_dec_weights(self, src_dec, **params):
         """
         Calculates src detector weights from the precaluclated src weight
