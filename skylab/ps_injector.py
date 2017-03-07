@@ -824,22 +824,51 @@ class StackingPointSourceInjector(PointSourceInjector):
     def gamma(self, val):
         self._gamma = float(val)
         if self.mc is not None:
-            self._effA()
+            self._src_dec_weight_spline()
         else:
             print("No MC setup for effA. Use fill() to do so.")
         return
 
     # Public methods
-    def effA(self, dec):
-        if self._spl_effA is None:
+    def src_dec_weights(self, src_dec, **params):
+        """
+        Calculates src detector weights from the precaluclated src weight
+        spline for given declinations `src_dec`. This is dependent on the
+        set vale for the spectral index `gamma`.
+
+        Same function as in `ps_model.py`.
+
+        Parameters
+        ----------
+        src_dec : array
+            Array of src declinations in radian: [-pi/2, pi/2]
+
+        Returns
+        -------
+        src_dec_w : array
+            Weights for each given src declination. For declinations outside
+            `sinDec_range` the weights are set to zero.
+        """
+        if self._spl_src_dec_weights is None:
             raise ValueError("Need to fill() with MC before effA calculation.")
-        """Vectorized version for multiple dec"""
-        dec = np.atleast_1d(dec)
-        effA = self._spl_effA(np.sin(dec))
-        invalid = ((np.sin(dec) < self.sinDec_bins[0]) |
-                   (np.sin(dec) > self.sinDec_bins[-1]))
-        effA[invalid] = 0.
-        return effA
+        src_dec = np.atleast_1d(src_dec)
+        src_dec_w = self._spl_src_dec_weights(np.sin(src_dec))
+        invalid = ((np.sin(src_dec) < self.sinDec_range[0]) |
+                   (np.sin(src_dec) > self.sinDec_range[1]))
+        src_dec_w[invalid] = 0.
+
+        return src_dec_w
+
+    # def effA(self, dec):
+    #     if self._spl_effA is None:
+    #         raise ValueError("Need to fill() with MC before effA calculation.")
+    #     """Vectorized version for multiple dec"""
+    #     dec = np.atleast_1d(dec)
+    #     effA = self._spl_effA(np.sin(dec))
+    #     invalid = ((np.sin(dec) < self.sinDec_bins[0]) |
+    #                (np.sin(dec) > self.sinDec_bins[-1]))
+    #     effA[invalid] = 0.
+    #     return effA
 
     def fill(self, mc, livetime, src_array, src_priors=None):
         # This only saves variables as class attributes.
