@@ -635,11 +635,19 @@ class StackingPointSourceInjector(PointSourceInjector):
     mc_sel = None
 
     # Private Functions
-    def _effA(self):
-        """Same as in ps_model, make interpolationg spline from sinDec hist.
-        Independent of concrete event selection and is only calculated for new
-        MCs or if gamma is changed."""
-        # Concat all needed information from all given MC samples
+    def _src_dec_weight_spline(self):
+        """
+        Same as in ps_model, make interpolating spline from sinDec hist.
+        Independent of concrete event selection and needs only be recalculated
+        for new MCs or if gamma is changed.
+
+        Same function as in ps_model.
+        """
+        # Concat all needed information from all given MC samples. MCs should
+        # describe all the same physics, so they can be treated as one single
+        # MC sample. If this isn't the case, this function must be changed and
+        # for every sample a different set of src detector weight must be
+        # caluclated and used in the sample method.
         ow = []
         trueE = []
         trueDec = []
@@ -652,6 +660,23 @@ class StackingPointSourceInjector(PointSourceInjector):
         ow = np.array(ow)
         trueE = np.array(trueE)
         trueDec = np.array(trueDec)
+
+
+        # Powerlaw weights from NuGen simulation's OneWeight. The livetime is
+        # not needed, because only one sample is used.
+        w = mc["ow"] * mc["trueE"]**(-self.gamma)
+
+        # Get event distribution dependent on declination. This is already
+        # properly normalized to area by the `density` keyword
+        h, bins = np.histogram(np.sin(mc["trueDec"]), weights=w,
+            range=self._sinDec_range, bins=self.sinDec_bins, density=True)
+
+        # Make interpolating spline through bin mids of histogram
+        mids = 0.5 * (bins[1:] + bins[:-1])
+        self._spl_src_dec_weights = \
+            scipy.interpolate.InterpolatedUnivariateSpline(
+                mids, h, k=self.order)
+
 
         # Powerlaw weights. Livetime given in days, converted to seconds
         w = ow * trueE**(-self.gamma) * livetime * 86400.
@@ -934,7 +959,7 @@ class StackingPointSourceInjector(PointSourceInjector):
                 self._src_priors = src_priors
                 self._NSIDE = hp.get_nside(src_priors[0])
 
-        # Calculate effA spline once for current MCs
+        # Calculate src detector weight spline once for current MCs and gamma
         self._effA()
 
         return
