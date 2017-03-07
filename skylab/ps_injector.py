@@ -651,25 +651,25 @@ class StackingPointSourceInjector(PointSourceInjector):
         ow = []
         trueE = []
         trueDec = []
-        livetime = 0.
+        # livetime = 0.
         for key in self.mc.iterkeys():
             ow.append(self.mc[key]["ow"])
             trueE.append(self.mc[key]["trueE"])
             trueDec.append(self.mc[key]["trueDec"])
-            livetime += self.livetime[key]
+            # livetime += self.livetime[key]
         ow = np.array(ow)
         trueE = np.array(trueE)
         trueDec = np.array(trueDec)
 
-
         # Powerlaw weights from NuGen simulation's OneWeight. The livetime is
         # not needed, because only one sample is used.
-        w = mc["ow"] * mc["trueE"]**(-self.gamma)
+        w = ow * trueE**(-self.gamma)
 
         # Get event distribution dependent on declination. This is already
         # properly normalized to area by the `density` keyword
-        h, bins = np.histogram(np.sin(mc["trueDec"]), weights=w,
-            range=self._sinDec_range, bins=self.sinDec_bins, density=True)
+        h, bins = np.histogram(np.sin(trueDec), weights=w,
+                               range=self._sinDec_range,
+                               bins=self.sinDec_bins, density=True)
 
         # Make interpolating spline through bin mids of histogram
         mids = 0.5 * (bins[1:] + bins[:-1])
