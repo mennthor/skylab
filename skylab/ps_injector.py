@@ -677,29 +677,6 @@ class StackingPointSourceInjector(PointSourceInjector):
             scipy.interpolate.InterpolatedUnivariateSpline(
                 mids, h, k=self.order)
 
-
-        # Powerlaw weights. Livetime given in days, converted to seconds
-        w = ow * trueE**(-self.gamma) * livetime * 86400.
-        # Get pdf of event distribution
-        h, self.sinDec_bins = np.histogram(np.sin(trueDec), weights=w,
-                                           range=self._sinDec_range,
-                                           bins=self._sinDec_bins,
-                                           density=True)
-        # Normalize by solid angle
-        h /= np.diff(self.sinDec_bins)
-        # Multiply histogram by event sum for event densitiy
-        h *= np.sum(w)
-        # Interpolating spline. Attention: spline is in log(h)
-        binmids = 0.5 * (self.sinDec_bins[:-1] + self.sinDec_bins[1:])
-
-        # NaN handling
-        y = np.log(h)
-        w = np.isfinite(y)
-        y = y[w]
-        binmids = binmids[w]
-
-        self._spl_effA = scipy.interpolate.InterpolatedUnivariateSpline(
-            binmids, y, k=self._order)
         return
 
     def _setup(self, src_dec):
@@ -883,17 +860,6 @@ class StackingPointSourceInjector(PointSourceInjector):
         src_dec_w[invalid] = 0.
 
         return src_dec_w
-
-    # def effA(self, dec):
-    #     if self._spl_effA is None:
-    #         raise ValueError("Need to fill() with MC before effA calculation.")
-    #     """Vectorized version for multiple dec"""
-    #     dec = np.atleast_1d(dec)
-    #     effA = self._spl_effA(np.sin(dec))
-    #     invalid = ((np.sin(dec) < self.sinDec_bins[0]) |
-    #                (np.sin(dec) > self.sinDec_bins[-1]))
-    #     effA[invalid] = 0.
-    #     return effA
 
     def fill(self, mc, livetime, src_array, src_priors=None):
         # This only saves variables as class attributes.
