@@ -960,7 +960,7 @@ class StackingPointSourceInjector(PointSourceInjector):
                 self._NSIDE = hp.get_nside(src_priors[0])
 
         # Calculate src detector weight spline once for current MCs and gamma
-        self._effA()
+        self._src_dec_weight_spline()
 
         return
 
