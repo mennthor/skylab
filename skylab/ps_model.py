@@ -933,7 +933,7 @@ class StackingPointSourceLLH(ClassicLLH):
             Simulation data. Needed fields: 'ow', 'trueE', 'trueDec'.
         """
         # Powerlaw weights from NuGen simulation's OneWeight. The livetime is
-        # not needed, because only one smaple is used.
+        # not needed, because only one sample is used.
         w = mc["ow"] * mc["trueE"]**(-self.gamma)
 
         # Get event distribution dependent on declination. This is already
