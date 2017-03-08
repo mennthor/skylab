@@ -326,7 +326,7 @@ class ClassicLLH(NullModel):
 
         """
         return
-    @profile
+    #@profile
     def fast_signal(self, src_ra, src_dec, ev, ind):
         r"""Spatial distance between source position and events
 
@@ -467,7 +467,7 @@ class WeightLLH(ClassicLLH):
         params = params
 
         self.hist_pars = pars
-        print(self.hist_pars)
+        #print(self.hist_pars)
 
         self._ndim_bins = bins
         self._ndim_range = kwargs.pop("range", None)

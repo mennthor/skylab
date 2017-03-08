@@ -453,6 +453,7 @@ class PointSourceInjector(Injector):
 
         gev_flux = mu / self._raw_flux
 
+        #--> output will be in (self.GeV*GeV-->Default=TeV)^(gamma-1)/cm^2/s
         return (gev_flux
                     * self.GeV**(1. - self.gamma) # turn from I3Unit to *GeV*
                     * self.E0**(2. - self.gamma)) # go from 1*GeV* to E0
@@ -639,8 +640,12 @@ class StackingPointSourceInjector(PointSourceInjector):
             raise ValueError("mc and livetime not compatible")
 
         self.src_dec = src_dec
-        self.w_theo = kwargs.pop('w_theo',np.ones_like(src_dec,dtype=float))
+
+        self.w_theo = kwargs.pop('w_theo',np.ones_like(self.src_dec,dtype=float))
+
+        model = kwargs.pop('model',False)
         self.w_theo /= self.w_theo.sum()
+
         ow = np.empty(0,dtype=float)
 
         self.mc = dict()
@@ -684,20 +689,24 @@ class StackingPointSourceInjector(PointSourceInjector):
             _m = band_mask.ravel()
             mc_arr["idx"] = np.tile(np.arange(N),len(self.src_dec))[_m]
             mc_arr['src_idx'] = np.repeat(np.arange(len(self.src_dec)),band_mask.sum(axis=1))
-            mc_arr["enum"] = key * np.ones(len(mc_arr['idx']))
+            mc_arr["enum"] = key * np.ones(n)
             self.mc_arr = np.append(self.mc_arr, mc_arr)
 
-            _ow = np.tile(self.mc[key]['ow'] * self.mc[key]["trueE"]**(-self.gamma), len(self.src_dec))[_m] * livetime[key] * 86400.
-            ow = np.append(ow,_ow)
-
-
+            if not model:
+                # weights given in days, weighted to the point source flux
+                _ow = (self.mc[key]['ow'] * self.mc[key]["trueE"]**(-self.gamma) * livetime[key] * 86400.)[mc_arr['idx']]
+                ow = np.append(ow,_ow)
 
             print("Sample {0:s}: Selected {1:6d} events for {2:6d} sources.".format(
                                         str(key), n, len(self.src_dec)))
 
-        
+
         omega = (self._omega / self.w_theo)[self.mc_arr['src_idx']]
 
+
+        #if the model injector class is used return omega
+        if model:
+            return omega
 
 
         if len(self.mc_arr) < 1:
@@ -714,8 +723,7 @@ class StackingPointSourceInjector(PointSourceInjector):
         r"""Setup weights for given models.
 
         """
-        # weights given in days, weighted to the point source flux
-        ow *= ow / omega
+        ow /= omega
 
         self._raw_flux = np.sum(ow, dtype=np.float)
 
@@ -752,7 +760,7 @@ class StackingPointSourceInjector(PointSourceInjector):
             Use poisson fluctuations, otherwise sample exactly *mean_mu*
 
         """
-
+        src_ra = src_ra
         # generate event numbers using poissonian events
         while True:
 
@@ -768,9 +776,8 @@ class StackingPointSourceInjector(PointSourceInjector):
                 continue
 
             sam_idx = self.random.choice(self.mc_arr, size=num, p=self._norm_w)
-            
 
-            
+
             # get the events that were sampled
             enums = np.unique(sam_idx["enum"])
 
@@ -789,4 +796,128 @@ class StackingPointSourceInjector(PointSourceInjector):
                 sam_ev[enum] = rotate_struct(sam_ev_i, src_ra[src_ind], self.src_dec[src_ind])
 
             yield num, sam_ev
+
+
+
+
+class StackingModelInjector(StackingPointSourceInjector):
+    r"""PointSourceInjector that weights events according to a specific model
+    flux.
+
+    Fluxes are measured in percent of the input flux.
+
+    """
+
+    def __init__(self, logE, logFlux, *args, **kwargs):
+        r"""Constructor, setting up the weighting function.
+
+        Parameters
+        -----------
+        logE : array
+            Flux Energy in units log(*self.GeV*)
+
+        logFlux : array
+            Flux in units log(*self.GeV* / cm^2 s), i.e. log(E^2 dPhi/dE)
+
+        Other Parameters
+        -----------------
+        deg : int
+            Degree of polynomial for flux parametrization
+
+        args, kwargs
+            Passed to PointSourceInjector
+
+        """
+
+        deg = kwargs.pop("deg", _deg)
+        ext = kwargs.pop("ext", _ext)
+
+        s = np.argsort(logE)
+        # E must be given in TeV
+        logE = logE[s]
+        # Flux = E^2 * flux given in TeV/...
+        logFlux = logFlux[s]
+        self._spline = scipy.interpolate.InterpolatedUnivariateSpline(
+                            logE, logFlux, k=deg)
+
+        # use default energy range of the flux parametrization
+        kwargs.setdefault("e_range", [10.**np.amin(logE), 10.**np.amax(logE)])
+
+        # Set all other attributes passed to the class
+        set_pars(self, **kwargs)
+        
+        print('Careful: logE and logFlux must be given in log10({0:.0f}TeV)'.format(10**(np.log10(self.GeV)-3)))
+        return
+    
+    
+    def fill(self, src_dec, mc, livetime, **kwargs):
+        r"""Fill the Injector with MonteCarlo events selecting events around
+        the source positions.
+
+        Parameters
+        -----------
+        src_dec: array-like
+            Source locations
+        mc : recarray, dict of recarrays with sample enum as key (StackingMultiPointSourceLLH)
+            Monte Carlo events
+        livetime : float, dict of floats
+            Livetime per sample
+
+        """
+        kwargs.setdefault('model', True)
+        super(StackingModelInjector, self).fill(src_dec, mc, livetime, **kwargs)
+        
+        #parameters of the distribution depending on each specific source
+        dE = kwargs.pop('dE',np.zeros_like(src_dec,dtype=np.float))
+        amp = kwargs.pop('amplitude',np.ones_like(src_dec,dtype=np.float))
+        assert(len(src_dec) == len(dE) == len(amp))
+        
+        ow = np.empty(0,dtype=float)
+        for key, mc_i in self.mc.iteritems():
+                mask = self.mc_arr['enum']==key
+
+                #spline input energy input in TeV --> trueLogGeV must be converted to TeV
+                trueLogGeV = np.log10(mc_i["trueE"][self.mc_arr['idx'][mask]]) - np.log10(self.GeV)
+                idx = self.mc_arr['src_idx'][mask]
+                logF = amp[idx] * self._spline(trueLogGeV - dE[idx])
+
+                #flux corresponds to 10^(logF) * E^(-2) given in 1/TeV  --> must be reconverted to 1/GeV
+                flux = np.power(10., logF - 2. * trueLogGeV) / self.GeV
+
+                # remove NaN's, etc.
+                m = (flux > 0.) & np.isfinite(flux)
+                m_tot = np.ones(len(self.mc_arr),dtype=bool)
+                m_tot[mask] = m
+                self.mc_arr = self.mc_arr[m_tot]
+
+                _ow = mc_i['ow'][self.mc_arr['idx'][mask][m]] * flux[m] * livetime[key] * 86400.
+                ow = np.append(ow,_ow)
+
+
+        omega = self._omega[self.mc_arr['src_idx']]
+        if len(self.mc_arr) < 1:
+            raise ValueError("Select no events at all")
+
+        print("Selected {0:d} events in total".format(len(self.mc_arr)))
+
+        self._weights(ow, omega)
+
+        return
+
+
+    
+    def flux2mu(self, flux):
+        r"""Convert a flux to number of expected events.
+
+        """
+
+        return self._raw_flux * flux
+
+    def mu2flux(self, mu):
+        r"""Convert a mean number of expected events to a flux.
+
+        """
+
+        return float(mu) / self._raw_flux
+
 
