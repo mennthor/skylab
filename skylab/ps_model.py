@@ -1047,4 +1047,4 @@ class StackingPointSourceLLH(ClassicLLH):
         #           source signal j.
         S = np.sum(S, axis=0)
 
-        return np.array(S)
+        return S
