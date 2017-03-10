@@ -680,7 +680,22 @@ class StackingPointSourceInjector(PointSourceInjector):
         return
 
     def _setup(self, src_dec):
-        """Vectorized to work for multiple src decs"""
+        """
+        Setup the solid angle `omega` and the `min_dec`, `max_dec` band border
+        for each src declination given in `src_dec`.
+        Those are needed to correctly pick MC events to be injected at each
+        src position in the `sample` method.
+
+        Vectorized version to work for multiple src declinations.
+
+        Parameters
+        ----------
+        src_dec : array
+            Declinations of the srcs given in radian: [-pi/2, pi/2]
+        """
+        # Make sure we always hav an array
+        src_dec = np.atleast_1d(src_dec)
+
         A, B = self._sinDec_range
 
         m = (A - B + 2. * self.sinDec_bandwidth) / (A - B)
@@ -688,14 +703,14 @@ class StackingPointSourceInjector(PointSourceInjector):
 
         sinDec = m * np.sin(src_dec) + b
 
-        min_sinDec = np.maximum(A, sinDec - self.sinDec_bandwidth)
-        max_sinDec = np.minimum(B, sinDec + self.sinDec_bandwidth)
+        min_sinDec = A, sinDec - self.sinDec_bandwidth
+        max_sinDec = B, sinDec + self.sinDec_bandwidth
 
-        self._min_dec = np.atleast_1d(np.arcsin(min_sinDec))
-        self._max_dec = np.atleast_1d(np.arcsin(max_sinDec))
+        self._min_dec = np.arcsin(min_sinDec)
+        self._max_dec = np.arcsin(max_sinDec)
 
         # Solid angles of selected events
-        self._omega = np.atleast_1d(2. * np.pi * (max_sinDec - min_sinDec))
+        self._omega = 2. * np.pi * (max_sinDec - min_sinDec)
         return
 
     def _select_events(self, src_dec):
