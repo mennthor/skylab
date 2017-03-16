@@ -857,32 +857,50 @@ class StackingPointSourceInjector(PointSourceInjector):
         return
 
     # Public methods
-    def src_dec_weights(self, src_dec, **params):
+    def src_dec_weights(self, src_dec, key=None, **params):
         """
         Calculates src detector weights from the precaluclated src weight
         spline for given declinations `src_dec`. This is dependent on the
         set vale for the spectral index `gamma`.
 
-        Same function as in `ps_model.py`.
+        Same function as in `ps_model.py` but here we have one seperate spline
+        per MC sample.
 
         Parameters
         ----------
         src_dec : array
             Array of src declinations in radian: [-pi/2, pi/2]
+        key : list of valid dict keys
+            The keys for the sample for which the weights shall be returned.
+            if ``None`` a dictionary with values for all samples is returned.
 
         Returns
         -------
-        src_dec_w : array
+        src_dec_w : dict
             Weights for each given src declination. For declinations outside
             `sinDec_range` the weights are set to zero.
         """
         if self._spl_src_dec_weights is None:
             raise ValueError("Need to fill() with MC before effA calculation.")
+
         src_dec = np.atleast_1d(src_dec)
-        src_dec_w = self._spl_src_dec_weights(np.sin(src_dec))
+
+        # Mask for requested declinations outside the current range
         invalid = ((np.sin(src_dec) < self.sinDec_range[0]) |
                    (np.sin(src_dec) > self.sinDec_range[1]))
-        src_dec_w[invalid] = 0.
+
+        # If no key given return spline for all samples
+        if key is None:
+            key = self._spl_src_dec_weights.iterkeys()
+
+        # Make sure we have iterable keys
+        keys = list(key)
+
+        src_dec_w = {}
+        for key in keys:
+            _src_dec_w = self._spl_src_dec_weights[key](np.sin(src_dec))
+            _src_dec_w[invalid] = 0.
+            src_dec_w[key] = _src_dec_w
 
         return src_dec_w
 
