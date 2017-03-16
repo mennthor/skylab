@@ -611,6 +611,23 @@ class ModelInjector(PointSourceInjector):
 # StackingPointSourceLLH
 ############################################################################
 class StackingPointSourceInjector(PointSourceInjector):
+    """
+    Usage
+    -----
+    Init the object with a spectral index for the src flux power law:
+
+    >>> stinj = psinj.StackingPointSourceInjector(gamma=2.0)
+
+    Fill the injector with (multiple) MC event samples:
+
+    >>> stinj.fill(mc=mc_dict, livetime=livetime_dict,
+                   src_array=srcs, src_priors)
+
+    Create the generator object which returns a sample for every call:
+
+    >>> gen = stinj.sample(src_ra=np.nan, mean_mu=100, poisson=False)
+    >>> gen.next()
+    """
     _src_dec = np.nan
     _sinDec_bandwidth = 0.1
     _sinDec_range = [-1., 1.]
