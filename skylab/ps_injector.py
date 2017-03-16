@@ -894,8 +894,27 @@ class StackingPointSourceInjector(PointSourceInjector):
         return src_dec_w
 
     def fill(self, mc, livetime, src_array, src_priors=None):
-        # This only saves variables as class attributes.
-        # Everytime we sample, we select events beforehand
+        """
+        Fill in MC events which get injected later.
+
+        This only does some sanity checks and makes the given samples available
+        to the class, so it can be used in the sampling process.
+
+        Parameters
+        ----------
+        mc : dict
+            Dictionary with key indicating the sample and a record array
+            containing the actual sampleas a value.
+        livetime : dict
+            Dictionary with same keys as above, giving the livetime in days
+            per sample in `mc`.
+        src_array : record-array
+            Src postion and weight information. Record array with fields `ra`
+            for right-ascension in [0, 2pi], `dec` for declination in
+            [-pi/2, pi/2] and `src_w` for the intrinsic source weight.
+        src_priors : array
+            2D array with shape (number of srcs, healpy prior map length).
+        """
         if isinstance(mc, dict) ^ isinstance(livetime, dict):
             raise ValueError("mc and livetime not compatible")
 
