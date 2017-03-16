@@ -859,7 +859,7 @@ class StackingPointSourceInjector(PointSourceInjector):
         return
 
     # Public methods
-    def src_dec_weights(self, src_dec, key=None, **params):
+    def src_dec_weights(self, src_dec, keys=None, **params):
         """
         Calculates src detector weights from the precaluclated src weight
         spline for given declinations `src_dec`. This is dependent on the
@@ -872,7 +872,7 @@ class StackingPointSourceInjector(PointSourceInjector):
         ----------
         src_dec : array
             Array of src declinations in radian: [-pi/2, pi/2]
-        key : list of valid dict keys
+        keys : list of valid dict keys
             The keys for the sample for which the weights shall be returned.
             if ``None`` a dictionary with values for all samples is returned.
 
@@ -892,11 +892,12 @@ class StackingPointSourceInjector(PointSourceInjector):
                    (np.sin(src_dec) > self.sinDec_range[1]))
 
         # If no key given return spline for all samples
-        if key is None:
-            key = self._spl_src_dec_weights.iterkeys()
+        if keys is None:
+            keys = self._spl_src_dec_weights.iterkeys()
 
         # Make sure we have iterable keys
-        keys = list(key)
+        if not hasattr(keys, "__iter__"):
+            keys = [keys, ]
 
         src_dec_w = {}
         for key in keys:
