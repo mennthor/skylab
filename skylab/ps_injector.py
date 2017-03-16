@@ -644,8 +644,8 @@ class StackingPointSourceInjector(PointSourceInjector):
     _src_norm_w = None
     _nsrcs = 0
 
+    # Extra information for the creation of the src weight spline
     _sinDec_bins = 25
-    _spl_effA = None
     _order = 2
 
     mc = None
@@ -679,13 +679,15 @@ class StackingPointSourceInjector(PointSourceInjector):
             # properly normalized to area by the `density` keyword
             h, bins = np.histogram(np.sin(trueDec), weights=w,
                                    range=self._sinDec_range,
-                                   bins=self.sinDec_bins, density=True)
+                                   bins=self._sinDec_bins, density=True)
+
+            self._sinDec_bins = bins
 
             # Make interpolating spline through bin mids of histogram
             mids = 0.5 * (bins[1:] + bins[:-1])
             self._spl_src_dec_weights[key] = \
                 scipy.interpolate.InterpolatedUnivariateSpline(
-                    mids, h, k=self.order)
+                    mids, h, k=self._order)
 
         return
 
