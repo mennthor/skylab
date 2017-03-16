@@ -994,6 +994,39 @@ class StackingPointSourceInjector(PointSourceInjector):
         # index gamma. Src detector weights are calculated from this spline.
         self._src_dec_weight_spline()
 
+        # Setup dec bands and select events for the src positions
+        self._setup(src_dec)
+        self._select_events(src_dec)
+
+        # Overwrite `self._get_src_pos` with the correct function to avoid
+        # unnecessary if-statements in the `sample` function later.
+        if self._src_priors is not None:
+            # If we have src priors, sample new src positions from each prior
+            def _get_src_from_prior():
+                # Sample a single map position from the prior for each prior
+                src_idx = np.zeros(len(self._src_priors), dtype=int) - 1
+                for i, prior in enumerate(self._src_priors):
+                    src_idx[i] = amp_hp.healpy_rejection_sampler(prior, n=1)[0]
+                # Get equatorial coordinates for the new src positions
+                src_th, src_phi = hp.pix2ang(self._NSIDE, src_idx)
+                src_dec, src_ra = amp_hp.ThetaPhiToDecRa(src_th, src_phi)
+                src_dec, src_ra = np.atleast_1d(src_dec), np.atleast_1d(src_ra)
+                # Now setup dec bands and select events for the new src
+                # positions.
+                self._setup(src_dec)
+                self._select_events(src_dec)
+                return src_dec, src_ra
+
+            self._get_src_pos = _get_src_from_prior
+        else:
+            # Otherwise use given and fixed src positions for each trial.
+            # Setup and event selection was already done above in fill for the
+            # fixed case.
+            def _get_fixed_src():
+                return self._src["dec"], self._src["ra"]
+
+            self._get_src_pos = _get_fixed_src
+
         return
 
     def sample(self, src_ra, mean_mu, poisson=True, ret_src_dir=False):
@@ -1037,24 +1070,8 @@ class StackingPointSourceInjector(PointSourceInjector):
                 yield num, None
                 continue
 
-            # If we have src priors, sample new src positions from each prior
-            if self._src_priors is not None:
-                src_idx = np.zeros(len(self._src_priors), dtype=int) - 1
-                for i, prior in enumerate(self._src_priors):
-                    src_idx[i] = amp_hp.healpy_rejection_sampler(prior, n=1)[0]
-                # Get equatorial coordinates for the new src positions
-                src_th, src_phi = hp.pix2ang(self._NSIDE, src_idx)
-                src_dec, src_ra = amp_hp.ThetaPhiToDecRa(src_th, src_phi)
-                src_dec = np.atleast_1d(src_dec)
-                src_ra = np.atleast_1d(src_ra)
-            else:
-                # Otherwise use static given src positions for each trial
-                src_ra = self._src["ra"]
-                src_dec = self._src["dec"]
-
-            # Now setup dec bands and select events for the new src positions
-            self._setup(src_dec)
-            self._select_events(src_dec)
+            # Get new src positions depending on having priors or not
+            src_dec, src_ra = self._get_src_pos()
 
             # Sample num events from all selected events with the global weight
             sam_idx = self.random.choice(self.mc_arr, size=num, p=self._norm_w)
