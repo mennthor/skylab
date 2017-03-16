@@ -654,45 +654,38 @@ class StackingPointSourceInjector(PointSourceInjector):
     # Private Functions
     def _src_dec_weight_spline(self):
         """
-        Same as in ps_model, make interpolating spline from sinDec hist.
+        Make interpolating spline from sinDec hist for each sample.
+
         Independent of concrete event selection and needs only be recalculated
         for new MCs or if gamma is changed.
-
-        Same function as in ps_model.
+        This is the same function as in ps_model but here creating one spline
+        for each sample in the MC dict.
         """
-        # Concat all needed information from all given MC samples. MCs should
-        # describe all the same physics, so they can be treated as one single
-        # MC sample. If this isn't the case, this function must be changed and
-        # for every sample a different set of src detector weight must be
-        # caluclated and used in the sample method.
-        ow = []
-        trueE = []
-        trueDec = []
-        # livetime = 0.
+        self._spl_src_dec_weights = {}
+
+        # For every MC sample create a custom spline describing the detection
+        # efficiency for a power law flux.
         for key in self.mc.iterkeys():
-            ow.append(self.mc[key]["ow"])
-            trueE.append(self.mc[key]["trueE"])
-            trueDec.append(self.mc[key]["trueDec"])
-            # livetime += self.livetime[key]
-        ow = np.array(ow)
-        trueE = np.array(trueE)
-        trueDec = np.array(trueDec)
+            # Select events from each sample
+            ow = self.mc[key]["ow"]
+            trueE = self.mc[key]["trueE"]
+            trueDec = self.mc[key]["trueDec"]
 
-        # Powerlaw weights from NuGen simulation's OneWeight. The livetime is
-        # not needed, because only one sample is used.
-        w = ow * trueE**(-self.gamma)
+            # Powerlaw weights from NuGen simulation's OneWeight (ow) already
+            # multiplied by livetime in `fill`.
+            w = ow * trueE**(-self.gamma)
 
-        # Get event distribution dependent on declination. This is already
-        # properly normalized to area by the `density` keyword
-        h, bins = np.histogram(np.sin(trueDec), weights=w,
-                               range=self._sinDec_range,
-                               bins=self.sinDec_bins, density=True)
+            # Get event distribution dependent on declination. This is already
+            # properly normalized to area by the `density` keyword
+            h, bins = np.histogram(np.sin(trueDec), weights=w,
+                                   range=self._sinDec_range,
+                                   bins=self.sinDec_bins, density=True)
 
-        # Make interpolating spline through bin mids of histogram
-        mids = 0.5 * (bins[1:] + bins[:-1])
-        self._spl_src_dec_weights = \
-            scipy.interpolate.InterpolatedUnivariateSpline(
-                mids, h, k=self.order)
+            # Make interpolating spline through bin mids of histogram
+            mids = 0.5 * (bins[1:] + bins[:-1])
+            self._spl_src_dec_weights[key] = \
+                scipy.interpolate.InterpolatedUnivariateSpline(
+                    mids, h, k=self.order)
 
         return
 
