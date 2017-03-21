@@ -990,15 +990,7 @@ class StackingPointSourceInjector(PointSourceInjector):
                 self._src_priors = src_priors
                 self._NSIDE = hp.get_nside(src_priors[0])
 
-        # Calc src detector weight spline once for current MCs and spectral
-        # index gamma. Src detector weights are calculated from this spline.
-        self._src_dec_weight_spline()
-
-        # Setup dec bands and select events for the src positions
-        self._setup(src_dec)
-        self._select_events(src_dec)
-
-        # Overwrite `self._get_src_pos` with the correct function to avoid
+        # Now overwrite `self._get_src_pos` with the correct function to avoid
         # unnecessary if-statements in the `sample` function later.
         if self._src_priors is not None:
             # If we have src priors, sample new src positions from each prior
@@ -1026,6 +1018,14 @@ class StackingPointSourceInjector(PointSourceInjector):
                 return self._src["dec"], self._src["ra"]
 
             self._get_src_pos = _get_fixed_src
+
+        # Calc src detector weight splines once for current MCs and spectral
+        # index gamma. Src detector weights are calculated from these splines.
+        self._src_dec_weight_spline()
+
+        # Setup dec bands and select events for the src positions
+        self._setup(src_dec)
+        self._select_events(src_dec)
 
         return
 
