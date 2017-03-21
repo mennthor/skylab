@@ -1073,7 +1073,9 @@ class StackingPointSourceInjector(PointSourceInjector):
             # Get new src positions depending on having priors or not
             src_dec, src_ra = self._get_src_pos()
 
-            # Sample `num` events from all selected events with the global weight
+            # Sample `num` events from all selected events with the global
+            # weight calculated from detection weight splines and instrinsic
+            # source weights.
             sam_idx = self.random.choice(self.mc_arr, size=num, p=self._norm_w)
             self.sam = sam_idx
 
