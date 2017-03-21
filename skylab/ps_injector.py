@@ -651,7 +651,7 @@ class StackingPointSourceInjector(PointSourceInjector):
     mc = None
     mc_sel = None
 
-    # Private Functions
+    # Private functions
     def _src_dec_weight_spline(self):
         """
         Make interpolating spline from sinDec hist for each sample.
@@ -1073,7 +1073,7 @@ class StackingPointSourceInjector(PointSourceInjector):
             # Get new src positions depending on having priors or not
             src_dec, src_ra = self._get_src_pos()
 
-            # Sample num events from all selected events with the global weight
+            # Sample `num` events from all selected events with the global weight
             sam_idx = self.random.choice(self.mc_arr, size=num, p=self._norm_w)
             self.sam = sam_idx
 
