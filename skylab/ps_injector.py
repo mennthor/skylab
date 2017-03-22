@@ -671,8 +671,8 @@ class StackingPointSourceInjector(PointSourceInjector):
             trueE = self.mc[key]["trueE"]
             trueDec = self.mc[key]["trueDec"]
 
-            # Powerlaw weights from NuGen simulation's OneWeight (ow) already
-            # multiplied by livetime in `fill`.
+            # Powerlaw weights from NuGen simulation's OneWeight (ow) have been
+            # already multiplied by livetime in `_select_events`.
             w = ow * trueE**(-self.gamma)
 
             # Get event distribution dependent on declination. This is already
@@ -806,7 +806,7 @@ class StackingPointSourceInjector(PointSourceInjector):
     def _weights(self, src_dec):
         """
         Calculate combined event sample weights. Events are already selected
-        in the MC array from the `fill`function.
+        in the MC array in the `_select_events`function.
 
         Events get preselected per MC sample and per src position in `fill`.
         So here we assign a per event weight depending on the weight of the
