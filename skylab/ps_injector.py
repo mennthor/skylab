@@ -804,8 +804,22 @@ class StackingPointSourceInjector(PointSourceInjector):
         return
 
     def _weights(self, src_dec):
-        """Version for multiple srcs. Calculate src total normed weight and
-        event weights with the injected raw flux for given srcs."""
+        """
+        Calculate combined event sample weights. Events are already selected
+        in the MC array from the `fill`function.
+
+        Events get preselected per MC sample and per src position in `fill`.
+        So here we assign a per event weight depending on the weight of the
+        event in the sample itself from its OneWeight and energy.
+        Also we have a weight depending on the src the event belongs to.
+        For each src we created a spline describing its detection efficiency
+        for each MC sample where the src weight gets read off.
+
+        Parameters
+        ----------
+        src_dec : array
+            Declinations of the srcs given in radian: [-pi/2, pi/2]
+        """
         # First calculate total src weights = det. weight * theo. src weight
         src_norm_w = self.effA(src_dec) * self._src["src_w"]
         self._src_norm_w = src_norm_w / np.sum(src_norm_w)
