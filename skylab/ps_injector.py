@@ -808,12 +808,21 @@ class StackingPointSourceInjector(PointSourceInjector):
         Calculate combined event sample weights. Events are already selected
         in the MC array in the `_select_events`function.
 
-        Events get preselected per MC sample and per src position in `fill`.
-        So here we assign a per event weight depending on the weight of the
-        event in the sample itself from its OneWeight and energy.
-        Also we have a weight depending on the src the event belongs to.
-        For each src we created a spline describing its detection efficiency
-        for each MC sample where the src weight gets read off.
+        We need a globally normalized per event weight for the `sample` method
+        to inject events correctly from all given samples and for all src
+        positions.
+        Because we select MC events in a declination band around a src position
+        and for each sample we might have a different detection weight for
+        each source we need three single weights.
+
+        1. The per event weight calculated from the flux per src in each sample.
+           This comes from the events OneWeight and energy.
+        2. This gets multiplied with the normalized src weight per sample. We
+           read this off the corresponding declination spline we created for
+           each sample in the _spl_src_dec_weights method.
+        3. To get a correctly normalized global weight we need to normalize
+           with the total flux from all samples and weight each event with
+           the flux per sample
 
         Parameters
         ----------
@@ -826,46 +835,57 @@ class StackingPointSourceInjector(PointSourceInjector):
 
         # Save in the same dict structure as the MC samples
         self._src_norm_w = {}
+        self._raw_flux = {}
+        self._raw_flux_per_src = {}
+        self._norm_w = {}
 
         for enum in enum_ids:
             # Calculate total src weights = det. weight * theo. src weight
+            # for the current sample
             src_tot_w = (self.src_dec_weights(src_dec, keys=[enum]) *
                          self._src["src_w"])
             self._src_norm_w[enum] = src_tot_w / np.sum(src_tot_w)
 
-            # Now calculate the total flux per MC sample
-            self._raw_flux_per_src = np.zeros(len(self._src), dtype=np.float)
-            self._norm_w = np.zeros(len(self.mc_arr), dtype=np.float)
+            self._raw_flux_per_src[enum] = np.zeros(
+                len(self._src), dtype=np.float)
+            self._norm_w[enum] = np.zeros(len(self.mc_arr), dtype=np.float)
 
-            # Loop over all selected events per src and calc the raw_flux per src
+            # Loop over all selected events per src in the current sample and
+            # calculate the raw_flux per src per sample
+            enum_mask = (self.mc_arr["enum"] == enum)
             for src_idx in np.unique(self.mc_arr["src_enum"]):
-                src_mask = (self.mc_arr["src_enum"] == src_idx)
+                # Select only current src events from current sample
+                src_mask = enum_mask & (self.mc_arr["src_enum"] == src_idx)
 
-                # Finalize event weight calculation and save in mc_arr
+                # Finalize event weight calculation and save in mc_arr.
+                # Livetimes are already considered in `_select_events`.
                 trueEi = self.mc_arr["trueE"][src_mask]
                 omegai = self._omega[src_idx]
                 self.mc_arr["ow"][src_mask] *= trueEi**(-self.gamma) / omegai
 
-                # Raw flux per source
-                self._raw_flux_per_src[src_idx] = np.sum(
+                # Raw flux per source per sample
+                self._raw_flux_per_src[enum][src_idx] = np.sum(
                     self.mc_arr["ow"][src_mask], dtype=np.float)
 
-                # Normalized weights per source to flux per source to obtain a
+                # Normalize weights per source to flux per source to obtain a
                 # weight normalized for each src on its own.
-                self._norm_w[src_mask] = (self.mc_arr["ow"][src_mask] /
-                                          self._raw_flux_per_src[src_idx])
-                # Now multiply with normalized src weights to get sampling weight
-                # for all events in the selected sample.
-                # This automatically samples events at srcs with higher weights.
-                self._norm_w[src_mask] *= self._src_norm_w[src_idx]
+                self._norm_w[enum][src_mask] = (self.mc_arr["ow"][src_mask] /
+                    self._raw_flux_per_src[enum][src_idx])
 
-                # Double-check if no weight is dominating the sample
-                if self._norm_w[src_mask].max() > 0.1:
-                    logger.warn("Warning: Maximal weight exceeds 10%: " +
-                                "{0:7.2%}".format(self._norm_w[src_mask].max()))
+                # Now multiply with normalized src weights to get the sampling
+                # weight for all events in the selected sample.
+                self._norm_w[enum][src_mask] *= self._src_norm_w[enum][src_idx]
 
-        # Calc total inserted flux for all srcs by weighting with src weights
-        self._raw_flux = np.sum(self._src_norm_w * self._raw_flux_per_src)
+            # Double-check if no weight is dominating the sample
+            _max = np.max(self._norm_w[enum])
+            if _max > 0.1:
+                logger.warn("Warning: Maximal weight exceeds 10%: " +
+                            "{0:7.2%} in sample {1:d}".format(_max, enum))
+
+            # Calc total inserted flux for the current sample
+            self._raw_flux[enum] = np.sum(self._src_norm_w[enum] *
+                                          self._raw_flux_per_src[enum])
+
         return
 
     @property
