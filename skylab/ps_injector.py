@@ -644,53 +644,10 @@ class StackingPointSourceInjector(PointSourceInjector):
     _src_norm_w = None
     _nsrcs = 0
 
-    # Extra information for the creation of the src weight spline
-    _sinDec_bins = 25
-    _order = 2
-
     mc = None
     mc_sel = None
 
     # Private functions
-    def _src_dec_weight_spline(self):
-        """
-        Make interpolating spline from sinDec hist for each sample.
-
-        Independent of concrete event selection and needs only be recalculated
-        for new MCs or if gamma is changed.
-        This is the same function as in ps_model but here creating one spline
-        for each sample in the MC dict.
-        """
-        self._spl_src_dec_weights = {}
-
-        # For every MC sample create a custom spline describing the detection
-        # efficiency for a power law flux.
-        for key in self.mc.iterkeys():
-            # Select events from each sample
-            ow = self.mc[key]["ow"]
-            trueE = self.mc[key]["trueE"]
-            trueDec = self.mc[key]["trueDec"]
-
-            # Powerlaw weights from NuGen simulation's OneWeight (ow) have been
-            # already multiplied by livetime in `_select_events`.
-            w = ow * trueE**(-self.gamma)
-
-            # Get event distribution dependent on declination. This is already
-            # properly normalized to area by the `density` keyword
-            h, bins = np.histogram(np.sin(trueDec), weights=w,
-                                   range=self._sinDec_range,
-                                   bins=self._sinDec_bins, density=True)
-
-            self._sinDec_bins = bins
-
-            # Make interpolating spline through bin mids of histogram
-            mids = 0.5 * (bins[1:] + bins[:-1])
-            self._spl_src_dec_weights[key] = \
-                scipy.interpolate.InterpolatedUnivariateSpline(
-                    mids, h, k=self._order)
-
-        return
-
     def _setup(self, src_dec):
         """
         Setup the solid angle `omega` and the `min_dec`, `max_dec` band border
@@ -705,24 +662,27 @@ class StackingPointSourceInjector(PointSourceInjector):
         src_dec : array
             Declinations of the srcs given in radian: [-pi/2, pi/2]
         """
-        # Make sure we always hav an array
+        # Make sure we always have an array
         src_dec = np.atleast_1d(src_dec)
 
         A, B = self._sinDec_range
 
-        m = (A - B + 2. * self.sinDec_bandwidth) / (A - B)
-        b = self.sinDec_bandwidth * (A + B) / (B - A)
+        # m = (A - B + 2. * self.sinDec_bandwidth) / (A - B)
+        # b = self.sinDec_bandwidth * (A + B) / (B - A)
+        # sinDec = m * np.sin(src_dec) + b
 
-        sinDec = m * np.sin(src_dec) + b
+        # Use central bands instead of the decentralized in the comment
+        sinDec = np.sin(src_dec)
 
-        min_sinDec = A, sinDec - self.sinDec_bandwidth
-        max_sinDec = B, sinDec + self.sinDec_bandwidth
+        min_sinDec = np.maximum(A, sinDec - self.sinDec_bandwidth)
+        max_sinDec = np.minimum(B, sinDec + self.sinDec_bandwidth)
 
         self._min_dec = np.arcsin(min_sinDec)
         self._max_dec = np.arcsin(max_sinDec)
 
         # Solid angles of selected events
         self._omega = 2. * np.pi * (max_sinDec - min_sinDec)
+
         return
 
     def _select_events(self, src_dec):
@@ -735,7 +695,8 @@ class StackingPointSourceInjector(PointSourceInjector):
         self.mc_arr = np.empty(0, dtype=[("idx", np.int),
                                          ("enum", np.int),
                                          ("src_enum", np.int),
-                                         ("dec", np.float),
+                                         ("trueDec", np.float),
+                                         ("trueRa", np.float),
                                          ("trueE", np.float),
                                          ("ow", np.float)])
 
@@ -751,11 +712,13 @@ class StackingPointSourceInjector(PointSourceInjector):
         print(67 * "-" + "\nStackingLLHInjector fill() info:")
         for j, (omega, min_dec, max_dec) in enumerate(zip(
                 self._omega, self._min_dec, self._max_dec)):
-            print("  Source {:2d}".format(j))
-            print("    DEC : {:7.2f}° - {:7.2f}°".format(
+            print("  Source {:2d} at DEC {}°".format(
+                j, np.rad2deg(self._src["dec"][j])))
+            print("    DEC range    : {:7.2f}° - {:7.2f}°".format(
                 np.rad2deg(min_dec), np.rad2deg(max_dec)))
-            print("    E   : {:7.2f} and {:7.2f} in {:7.2f} GeV".format(
-                self.e_range[0], self.e_range[1], self.GeV))
+            print("    Energy range : " +
+                  "{:7.2f} and {:7.2f} in unit {:7.2f} GeV".format(
+                      self.e_range[0], self.e_range[1], self.GeV))
             # Now iterate over all MC samples and select events for the src j
             for key, mc_i in self.mc.iteritems():
                 # Get MC event's in the selected energy and sinDec range for
@@ -782,11 +745,14 @@ class StackingPointSourceInjector(PointSourceInjector):
                 mc_arr["idx"] = np.arange(N)
                 mc_arr["enum"] = key * np.ones(N)
                 mc_arr["src_enum"] = j * np.ones(N)
-                # Scale each OW to its corresponding livetime for the sample
-                mc_arr["ow"] = (self.mc_sel[key][j]["ow"] *
-                                self.livetime[key] * 86400.)
                 mc_arr["trueE"] = self.mc_sel[key][j]["trueE"]
-                mc_arr["dec"] = self.mc_sel[key][j]["dec"]
+                mc_arr["trueDec"] = self.mc_sel[key][j]["trueDec"]
+                mc_arr["trueRa"] = self.mc_sel[key][j]["trueRa"]
+                # Calculate correct OneWeight per event taking into account
+                # the different sample livetimes
+                mc_arr["ow"] = (self.mc_sel[key][j]["ow"] *
+                                mc_arr["trueE"]**self.gamma *
+                                self.livetime[key] * 86400.)
 
                 self.mc_arr = np.append(self.mc_arr, mc_arr)
 
@@ -811,80 +777,29 @@ class StackingPointSourceInjector(PointSourceInjector):
         We need a globally normalized per event weight for the `sample` method
         to inject events correctly from all given samples and for all src
         positions.
-        Because we select MC events in a declination band around a src position
-        and for each sample we might have a different detection weight for
-        each source we need three single weights.
-
-        1. The per event weight calculated from the flux per src in each sample.
-           This comes from the events OneWeight and energy.
-        2. This gets multiplied with the normalized src weight per sample. We
-           read this off the corresponding declination spline we created for
-           each sample in the _spl_src_dec_weights method.
-        3. To get a correctly normalized global weight we need to normalize
-           with the total flux from all samples and weight each event with
-           the flux per sample
 
         Parameters
         ----------
         src_dec : array
             Declinations of the srcs given in radian: [-pi/2, pi/2]
         """
-        # Get identifier keys from all preselected MC samples and srcs
-        enum_ids = np.unique(self.mc_arr["enum"])
-        src_ids = np.unique(self.mc_arr["src_enum"])
+        # For final physical wights we need to scale to the new solid angle
+        # for each src. The intrinsic src weight effectively scales that solid
+        # angle.
+        omega = (self._omega / self._norm_src_w)[self.mc_arr['src_enum']]
 
-        # Save in the same dict structure as the MC samples
-        self._src_norm_w = {}
-        self._raw_flux = {}
-        self._raw_flux_per_src = {}
-        self._norm_w = {}
+        self.mc_arr["ow"] /= omega
 
-        for enum in enum_ids:
-            # Calculate total src weights = det. weight * theo. src weight
-            # for the current sample
-            src_tot_w = (self.src_dec_weights(src_dec, keys=[enum]) *
-                         self._src["src_w"])
-            self._src_norm_w[enum] = src_tot_w / np.sum(src_tot_w)
+        # Total injected flux over all samples and sources
+        self._raw_flux = np.sum(self.mc_arr["ow"])
 
-            self._raw_flux_per_src[enum] = np.zeros(
-                len(self._src), dtype=np.float)
-            self._norm_w[enum] = np.zeros(len(self.mc_arr), dtype=np.float)
+        # Normalize global weights for probability sampling in `sample`
+        self._norm_w = self.mc_arr["ow"] / self._raw_flux
 
-            # Loop over all selected events per src in the current sample and
-            # calculate the raw_flux per src per sample
-            enum_mask = (self.mc_arr["enum"] == enum)
-            for src_idx in np.unique(self.mc_arr["src_enum"]):
-                # Select only current src events from current sample
-                src_mask = enum_mask & (self.mc_arr["src_enum"] == src_idx)
-
-                # Finalize event weight calculation and save in mc_arr.
-                # Livetimes are already considered in `_select_events`.
-                trueEi = self.mc_arr["trueE"][src_mask]
-                omegai = self._omega[src_idx]
-                self.mc_arr["ow"][src_mask] *= trueEi**(-self.gamma) / omegai
-
-                # Raw flux per source per sample
-                self._raw_flux_per_src[enum][src_idx] = np.sum(
-                    self.mc_arr["ow"][src_mask], dtype=np.float)
-
-                # Normalize weights per source to flux per source to obtain a
-                # weight normalized for each src on its own.
-                self._norm_w[enum][src_mask] = (self.mc_arr["ow"][src_mask] /
-                    self._raw_flux_per_src[enum][src_idx])
-
-                # Now multiply with normalized src weights to get the sampling
-                # weight for all events in the selected sample.
-                self._norm_w[enum][src_mask] *= self._src_norm_w[enum][src_idx]
-
-            # Double-check if no weight is dominating the sample
-            _max = np.max(self._norm_w[enum])
-            if _max > 0.1:
-                logger.warn("Warning: Maximal weight exceeds 10%: " +
-                            "{0:7.2%} in sample {1:d}".format(_max, enum))
-
-            # Calc total inserted flux for the current sample
-            self._raw_flux[enum] = np.sum(self._src_norm_w[enum] *
-                                          self._raw_flux_per_src[enum])
+        # Double-check if no weight is dominating the sample
+        if self._norm_w.max() > 0.1:
+            logger.warn("Warning: Maximal weight exceeds 10%: {0:7.2%}".format(
+                        self._norm_w.max()))
 
         return
 
@@ -902,54 +817,6 @@ class StackingPointSourceInjector(PointSourceInjector):
         return
 
     # Public methods
-    def src_dec_weights(self, src_dec, keys=None, **params):
-        """
-        Calculates src detector weights from the precaluclated src weight
-        spline for given declinations `src_dec`. This is dependent on the
-        set vale for the spectral index `gamma`.
-
-        Same function as in `ps_model.py` but here we have one seperate spline
-        per MC sample.
-
-        Parameters
-        ----------
-        src_dec : array
-            Array of src declinations in radian: [-pi/2, pi/2]
-        keys : list of valid dict keys
-            The keys for the sample for which the weights shall be returned.
-            if ``None`` a dictionary with values for all samples is returned.
-
-        Returns
-        -------
-        src_dec_w : dict
-            Weights for each given src declination. For declinations outside
-            `sinDec_range` the weights are set to zero.
-        """
-        if self._spl_src_dec_weights is None:
-            raise ValueError("Need to fill() with MC before effA calculation.")
-
-        src_dec = np.atleast_1d(src_dec)
-
-        # Mask for requested declinations outside the current range
-        invalid = ((np.sin(src_dec) < self.sinDec_range[0]) |
-                   (np.sin(src_dec) > self.sinDec_range[1]))
-
-        # If no key given return spline for all samples
-        if keys is None:
-            keys = self._spl_src_dec_weights.iterkeys()
-
-        # Make sure we have iterable keys
-        if not hasattr(keys, "__iter__"):
-            keys = [keys, ]
-
-        src_dec_w = {}
-        for key in keys:
-            _src_dec_w = self._spl_src_dec_weights[key](np.sin(src_dec))
-            _src_dec_w[invalid] = 0.
-            src_dec_w[key] = _src_dec_w
-
-        return src_dec_w
-
     def fill(self, mc, livetime, src_array, src_priors=None):
         """
         Fill in MC events which get injected later.
@@ -1023,6 +890,9 @@ class StackingPointSourceInjector(PointSourceInjector):
         self._src["dec"] = src_dec
         self._src["src_w"] = src_w
 
+        # Save normed intrinsic src weight for weighting step
+        self._norm_src_w = self._src["src_w"] / np.sum(self._src["src_w"])
+
         # Setup prior maps if given, first check that healpy maps are valid
         if src_priors is not None:
             # Priors are arrays of map arrays
@@ -1061,10 +931,6 @@ class StackingPointSourceInjector(PointSourceInjector):
                 return self._src["dec"], self._src["ra"]
 
             self._get_src_pos = _get_fixed_src
-
-        # Calc src detector weight splines once for current MCs and spectral
-        # index gamma. Src detector weights are calculated from these splines.
-        self._src_dec_weight_spline()
 
         # Setup dec bands and select events for the src positions
         self._setup(src_dec)
