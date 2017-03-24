@@ -318,17 +318,17 @@ class PointSourceInjector(Injector):
         return
 
     def _setup(self):
-        r"""If one of *src_dec* or *dec_bandwidth* is changed or set, solid
+        r"""
+        If one of *src_dec* or *dec_bandwidth* is changed or set, solid
         angles and declination bands have to be re-set.
-
         """
-
         A, B = self._sinDec_range
 
-        m = (A - B + 2. * self.sinDec_bandwidth) / (A - B)
-        b = self.sinDec_bandwidth * (A + B) / (B - A)
+        # m = (A - B + 2. * self.sinDec_bandwidth) / (A - B)
+        # b = self.sinDec_bandwidth * (A + B) / (B - A)
 
-        sinDec = m * np.sin(self.src_dec) + b
+        # sinDec = m * np.sin(self.src_dec) + b
+        sinDec = np.atleast_1d(np.sin(self.src_dec))
 
         min_sinDec = np.maximum(A, sinDec - self.sinDec_bandwidth)
         max_sinDec = np.minimum(B, sinDec + self.sinDec_bandwidth)
