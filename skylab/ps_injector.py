@@ -42,18 +42,23 @@ import numpy as np
 from numpy.lib.recfunctions import drop_fields
 import scipy.interpolate
 
+# healpy for src priors
+import healpy as hp
+import anapymods.healpy as amp_hp  # My analysis tools
 
 # local package imports
 from . import set_pars
 from .utils import rotate
 
+
 # get module logger
 def trace(self, message, *args, **kwargs):
-    r""" Add trace to logger with output level beyond debug
-
+    r"""
+    Add trace to logger with output level beyond debug
     """
     if self.isEnabledFor(5):
         self._log(5, message, args, **kwargs)
+
 
 logging.addLevelName(5, "TRACE")
 logging.Logger.trace = trace
@@ -63,6 +68,7 @@ logger.addHandler(logging.StreamHandler())
 
 _deg = 4
 _ext = 3
+
 
 def rotate_struct(ev, ra, dec):
     r"""Wrapper around the rotate-method in skylab.utils for structured
@@ -96,7 +102,8 @@ def rotate_struct(ev, ra, dec):
     rot["sinDec"] = np.sin(rot_dec)
 
     # "delete" Monte Carlo information from sampled events
-    mc = ["trueRa", "trueDec", "trueE", "ow"]
+    # mc = ["trueRa", "trueDec", "trueE", "ow"]
+    mc = ["trueE", "ow"]  # Don't drop true dir for testing the sampling
 
     return drop_fields(rot, mc)
 
@@ -115,7 +122,7 @@ class Injector(object):
 
     def __raise__(self):
         raise NotImplementedError("Implemented as abstract in {0:s}...".format(
-                                    self.__repr__()))
+                                  self.__repr__()))
 
     def fill(self, *args, **kwargs):
         r"""Filling the injector with the sample to draw from, work only on
@@ -146,8 +153,8 @@ class Injector(object):
 
 
 class PointSourceInjector(Injector):
-    r"""Class to inject a point source into an event sample.
-
+    r"""
+    Class to inject a point source into an event sample.
     """
     _src_dec = np.nan
     _sinDec_bandwidth = 0.1
@@ -161,7 +168,8 @@ class PointSourceInjector(Injector):
     _seed = None
 
     def __init__(self, gamma, **kwargs):
-        r"""Constructor. Initialize the Injector class with basic
+        r"""
+        Constructor. Initialize the Injector class with basic
         characteristics regarding a point source.
 
         Parameters
@@ -171,9 +179,7 @@ class PointSourceInjector(Injector):
 
         kwargs : dict
             Set parameters of class different to default
-
         """
-
         # source properties
         self.gamma = gamma
 
@@ -183,19 +189,19 @@ class PointSourceInjector(Injector):
         return
 
     def __str__(self):
-        r"""String representation showing some more or less useful information
+        r"""
+        String representation showing some more or less useful information
         regarding the Injector class.
-
         """
-        sout = ("\n{0:s}\n"+
-                67*"-"+"\n"+
-                "\tSpectral index     : {1:6.2f}\n"+
-                "\tSource declination : {2:5.1f} deg\n"
+        sout = ("\n{0:s}\n" +
+                67 * "-" + "\n" +
+                "\tSpectral index     : {1:6.2f}\n" +
+                "\tSource declination : {2:5.1f} deg\n" +
                 "\tlog10 Energy range : {3:5.1f} to {4:5.1f}\n").format(
-                         self.__repr__(),
-                         self.gamma, np.degrees(self.src_dec),
-                         *self.e_range)
-        sout += 67*"-"
+                    self.__repr__(),
+                    self.gamma, np.degrees(self.src_dec),
+                    *self.e_range)
+        sout += 67 * "-"
 
         return sout
 
@@ -281,9 +287,9 @@ class PointSourceInjector(Injector):
 
     @sinDec_bandwidth.setter
     def sinDec_bandwidth(self, val):
-        if val < 0. or val > 1:
-            logger.warn("Sin Declination bandwidth {0:2e} not valid".format(
-                            val))
+        if val < 0. or val > 1.:
+            logger.warn("Sin Declination bandwidth {0:2e} ".format(val) +
+                        "not in valid range (0, 1)")
             val = min(1., np.fabs(val))
         self._sinDec_bandwidth = float(val)
 
@@ -294,16 +300,15 @@ class PointSourceInjector(Injector):
     @property
     def src_dec(self):
         return self._src_dec
-    
 
     @src_dec.setter
     def src_dec(self, val):
         if not np.all(np.fabs(val) < np.pi / 2.):
-            logger.warn("Source declination {0:2e} not in pi range".format(
-                            val))
+            logger.warn("Source declination {0:2e} ".format(val) +
+                        "not in [-pi/2, pi/2].")
             return
-        if not (np.all(np.sin(val) > self.sinDec_range[0])
-                and np.all(np.sin(val) < self.sinDec_range[1])):
+        if not (np.all(np.sin(val) > self.sinDec_range[0]) and
+                np.all(np.sin(val) < self.sinDec_range[1])):
             logger.error("Injection declination not in sinDec_range!")
 
         self._src_dec = np.atleast_1d(val).astype(float)
@@ -312,7 +317,6 @@ class PointSourceInjector(Injector):
 
         return
 
-    
     def _setup(self):
         r"""If one of *src_dec* or *dec_bandwidth* is changed or set, solid
         angles and declination bands have to be re-set.
@@ -384,6 +388,14 @@ class PointSourceInjector(Injector):
             mc = {-1: mc}
             livetime = {-1: livetime}
 
+        # For external use, make sure 'sinDec' is in the data
+        for key in mc.iterkeys():
+            print("Sample {}: {} events with livetime {} d.".format(
+                key, len(mc[key]), livetime[key]))
+            if "sinDec" not in mc[key].dtype.fields:
+                mc[key] = np.lib.recfunctions.append_fields(mc[key], "sinDec",
+                    np.sin(mc[key]["dec"]), dtypes=np.float, usemask=False)
+
         for key, mc_i in mc.iteritems():
             # get MC event's in the selected energy and sinDec range
             band_mask = ((np.sin(mc_i["trueDec"]) > np.sin(self._min_dec))
@@ -409,7 +421,7 @@ class PointSourceInjector(Injector):
             self.mc_arr = np.append(self.mc_arr, mc_arr)
 
             print("Sample {0:s}: Selected {1:6d} events at {2:7.2f}deg".format(
-                        str(key), N, np.degrees(self.src_dec)))
+                        str(key), N, float(np.degrees(self.src_dec))))
 
         if len(self.mc_arr) < 1:
             raise ValueError("Select no events at all")
@@ -603,67 +615,149 @@ class ModelInjector(PointSourceInjector):
         return float(mu) / self._raw_flux
 
 
-
-
-
-
-
-
 class StackingPointSourceInjector(PointSourceInjector):
-    r"""PointSourceInjector that injects events from different sources.
+    r"""
+    PointSourceInjector that injects events from different sources.
 
+    Also prior skymaps for each src can be given to sample variable src
+    positions when testing different hypotheses.
     """
-
-    def __init__(self, *args, **kwargs):
-
-        #Same initialisation as in injector class
-        super(StackingPointSourceInjector, self).__init__(*args, **kwargs)
-        return
-
-    
     def fill(self, src_dec, mc, livetime, **kwargs):
-        r"""Fill the Injector with MonteCarlo events selecting events around
-        the source positions.
+        """
+        Wrapper for `_fill` to store the original MC dict.
+        We want to store it, because
 
         Parameters
         -----------
         src_dec: array-like
             Source locations
-        mc : recarray, dict of recarrays with sample enum as key (StackingMultiPointSourceLLH)
-            Monte Carlo events
+        mc : recarray, dict of recarrays
+            Monte Carlo events. If given as dict, it must have the sample enum
+            as key (StackingMultiPointSourceLLH)
         livetime : float, dict of floats
             Livetime per sample
 
+        kwargs
+        ------
+        w_theo : array-like
+            Intrinsic source weight per src, e.g. from gamma flux
+        src_priors : array
+            2D array with shape (number of srcs, healpy prior map length).
+            Prior maps must be valid healpy maps with the same length.
         """
+        # For external use, make sure 'sinDec' is in the data
+        for key in mc.iterkeys():
+            print("Sample {}: {} events with livetime {} d.".format(
+                key, len(mc[key]), livetime[key]))
+            if "sinDec" not in mc[key].dtype.fields:
+                mc[key] = np.lib.recfunctions.append_fields(
+                    mc[key], "sinDec", np.sin(mc[key]["dec"]),
+                    dtypes=np.float, usemask=False)
 
+        # This is 1:1 from the original fill.
         if isinstance(mc, dict) ^ isinstance(livetime, dict):
             raise ValueError("mc and livetime not compatible")
 
+        # This triggers `_setup` which makes the sinDec bands
         self.src_dec = src_dec
+        # Correct src_ra is set in `sample`
+        self.src_ra = np.array(len(src_dec) * [np.nan, ], dtype=float)
 
-        self.w_theo = kwargs.pop('w_theo',np.ones_like(self.src_dec,dtype=float))
-
-        model = kwargs.pop('model',False)
+        # Normalize intrinsinc src weights
+        self.w_theo = kwargs.pop('w_theo',
+                                 np.ones_like(self.src_dec, dtype=float))
         self.w_theo /= self.w_theo.sum()
 
-        ow = np.empty(0,dtype=float)
-
-        self.mc = dict()
-        self.mc_arr = np.empty(0, dtype=[("idx", np.int),("src_idx", np.int), ("enum", np.int)])
-
+        self.model = kwargs.pop('model', False)
 
         if not isinstance(mc, dict):
             mc = {-1: mc}
             livetime = {-1: livetime}
 
+        self.mc_tot = mc
+        self.livetime_tot = livetime
+
+        # Setup src prior maps if given
+        src_priors = kwargs.pop("src_priors", None)
+        if src_priors is not None:
+            # Priors must be arrays of map arrays
+            src_priors = np.atleast_2d(src_priors)
+            if not hp.maptype(src_priors) == len(self.src_dec):
+                raise ValueError("Healpy map priors must match number of srcs")
+            else:
+                self._src_priors = src_priors
+                self._NSIDE = hp.get_nside(src_priors[0])
+                # Predefine `self._get_src_pos` with this function to avoid
+                # unnecessary if-statements in the `sample` function later.
+                self._get_src_pos = self._get_src_from_prior
+        else:
+            # Otherwise use given and fixed src positions
+            self._get_src_pos = self._get_fixed_src
+
+        self._fill()
+        return
+
+    def _get_src_from_prior(self):
+        """
+        Sample new src positions from given prior maps.
+
+        Returns
+        -------
+        (src_dec, src_ra) : tupel
+            src_dec and src_ra are arrays containing the new src positions.
+        """
+        # Sample single map position from the prior for each prior
+        src_idx = np.zeros(len(self._src_priors), dtype=int) - 1
+        for i, prior in enumerate(self._src_priors):
+            src_idx[i] = amp_hp.healpy_rejection_sampler(
+                prior, n=1)[0]
+        # Get equatorial coordinates for the new src positions
+        src_th, src_phi = hp.pix2ang(self._NSIDE, src_idx)
+        src_dec, src_ra = amp_hp.ThetaPhiToDecRa(src_th, src_phi)
+        self.src_dec, self.src_ra = np.atleast_1d(
+            src_dec), np.atleast_1d(src_ra)
+        # Setup dec bands and select events for new src positions
+        self._fill()
+        return self.src_dec, self.src_ra
+
+    def _get_fixed_src(self):
+        """
+        Convenience wrapper. Simply return the already given src positions.
+        """
+        return self.src_dec, self.src_ra
+
+    def _fill(self):
+        r"""Fill the Injector with MonteCarlo events selecting events around
+        the source positions.
+
+        Stripped with the IO head to only reselect events, when src postions
+        change. IO head is in `fill` wrapper function.
+
+        Parameters
+        -----------
+        src_dec: array-like
+            Source locations
+        """
+        ow = np.empty(0, dtype=float)
+
+        self.mc = dict()
+        self.mc_arr = np.empty(0, dtype=[("idx", np.int), ("src_idx", np.int),
+                                         ("enum", np.int)])
+
+        # Simply shortcuts to avoid lengthy formulas
+        mc = self.mc_tot
+        livetime = self.livetime_tot
+
         for key, mc_i in mc.iteritems():
-            # get MC event's in the selected energy and sinDec range around each src declination
-            band_mask = ((np.sin(mc_i["trueDec"]) > np.sin(self._min_dec)[:, np.newaxis])
-                         &(np.sin(mc_i["trueDec"]) < np.sin(self._max_dec)[:, np.newaxis]))
+            # Get MC events in the selected energy and sinDec range around
+            # each src declination
+            band_mask = ((np.sin(mc_i["trueDec"]) >
+                          np.sin(self._min_dec)[:, np.newaxis]) &
+                         (np.sin(mc_i["trueDec"]) <
+                          np.sin(self._max_dec)[:, np.newaxis]))
 
-            band_mask &= ((mc_i["trueE"] / self.GeV > self.e_range[0])
-                          &(mc_i["trueE"] / self.GeV < self.e_range[1]))
-
+            band_mask &= ((mc_i["trueE"] / self.GeV > self.e_range[0]) &
+                          (mc_i["trueE"] / self.GeV < self.e_range[1]))
 
             if not np.any(band_mask):
                 print("Sample {0:d}: No events were selected!".format(key))
@@ -671,43 +765,40 @@ class StackingPointSourceInjector(PointSourceInjector):
 
                 continue
 
-
-            # all mc events that are at least in one declination band
+            # All mc events that are at least in one declination band
             total_mask = band_mask.any(axis=0)
             N = np.count_nonzero(total_mask)
             self.mc[key] = mc_i[total_mask]
 
-            #adjust band mask, count number of total events selected
+            # Adjust band mask, count number of total events selected
             band_mask = (band_mask.T[total_mask]).T
             n = np.count_nonzero(band_mask)
 
-
-
-            # save mc info (idx, src_idx, enum, weigth) of all selected events
+            # Save mc info (idx, src_idx, enum, weigth) of all selected events
             mc_arr = np.empty(n, dtype=self.mc_arr.dtype)
 
             _m = band_mask.ravel()
-            mc_arr["idx"] = np.tile(np.arange(N),len(self.src_dec))[_m]
-            mc_arr['src_idx'] = np.repeat(np.arange(len(self.src_dec)),band_mask.sum(axis=1))
+            mc_arr["idx"] = np.tile(np.arange(N), len(self.src_dec))[_m]
+            mc_arr['src_idx'] = np.repeat(np.arange(len(self.src_dec)),
+                                          band_mask.sum(axis=1))
             mc_arr["enum"] = key * np.ones(n)
             self.mc_arr = np.append(self.mc_arr, mc_arr)
 
-            if not model:
+            if not self.model:
                 # weights given in days, weighted to the point source flux
-                _ow = (self.mc[key]['ow'] * self.mc[key]["trueE"]**(-self.gamma) * livetime[key] * 86400.)[mc_arr['idx']]
-                ow = np.append(ow,_ow)
+                _ow = (self.mc[key]['ow'] *
+                       self.mc[key]["trueE"]**(-self.gamma) *
+                       livetime[key] * 86400.)[mc_arr['idx']]
+                ow = np.append(ow, _ow)
 
-            print("Sample {0:s}: Selected {1:6d} events for {2:6d} sources.".format(
-                                        str(key), n, len(self.src_dec)))
-
+            print("Sample {0:s}: Selected {1:6d}".format(str(key), n) +
+                  " events for {0:6d} sources.".format(len(self.src_dec)))
 
         omega = (self._omega / self.w_theo)[self.mc_arr['src_idx']]
 
-
-        #if the model injector class is used return omega
-        if model:
+        # If the model injector class is used return omega
+        if self.model:
             return omega
-
 
         if len(self.mc_arr) < 1:
             raise ValueError("Select no events at all")
@@ -716,27 +807,33 @@ class StackingPointSourceInjector(PointSourceInjector):
 
         self._weights(ow, omega)
 
-
         return
 
     def _weights(self, ow, omega):
-        r"""Setup weights for given models.
+        r"""
+        Setup weights for given models.
 
+        Parameters
+        ----------
+        ow : array-like
+            Eventswise OneWeight, already scaled to livetime and energy flux.
+        omega : array-like
+            Solid angle for the injection range of source.
         """
+        # For a physical flux we need to scale to injection sold angle
         ow /= omega
 
         self._raw_flux = np.sum(ow, dtype=np.float)
 
-        # normalized weights for probability
+        # Normalized weights for sampling probability
         self._norm_w = ow / self._raw_flux
 
-        # double-check if no weight is dominating the sample
+        # Double-check if no weight is dominating the sample
         if self._norm_w.max() > 0.1:
             logger.warn("Warning: Maximal weight exceeds 10%: {0:7.2%}".format(
-                            self._norm_w.max()))
+                        self._norm_w.max()))
 
         return
-
 
     def sample(self, src_ra, mean_mu, poisson=True):
         r""" Generator to get sampled events for a Point Source location.
@@ -760,32 +857,37 @@ class StackingPointSourceInjector(PointSourceInjector):
             Use poisson fluctuations, otherwise sample exactly *mean_mu*
 
         """
-        src_ra = src_ra
-        # generate event numbers using poissonian events
+        self.src_ra = src_ra
+
+        # Generate event numbers using poissonian events
         while True:
-
             num = (self.random.poisson(mean_mu)
-                        if poisson else int(np.around(mean_mu)))
+                   if poisson else int(np.around(mean_mu)))
 
-            logger.debug(("Generated number of sources: {0:3d} "+
+            logger.debug(("Generated number of sources: {0:3d} " +
                           "of mean {1:5.1f} sources").format(num, mean_mu))
 
-            # if no events should be sampled, return nothing
+            # If no events should be sampled, return nothing
             if num < 1:
                 yield num, None
                 continue
 
+            # Sample new src positions if src_priors are given, otherwise use
+            # the given and fixed positions
+            src_dec, src_ra = self._get_src_pos()
+
+            # Sample the desired amount of events
             sam_idx = self.random.choice(self.mc_arr, size=num, p=self._norm_w)
 
-
-            # get the events that were sampled
+            # Get the MC sample indices of the sampled events
             enums = np.unique(sam_idx["enum"])
 
             if len(enums) == 1 and enums[0] < 0:
-                # only one sample, just return recarray
+                # Only one sample, just return recarray
                 sam_ev = np.copy(self.mc[enums[0]][sam_idx["idx"]])
 
-                yield num, rotate_struct(sam_ev, src_ra[sam_idx['src_idx']], self.src_dec[sam_idx['src_idx']])
+                yield num, rotate_struct(sam_ev, src_ra[sam_idx['src_idx']],
+                                         self.src_dec[sam_idx['src_idx']])
                 continue
 
             sam_ev = dict()
@@ -793,11 +895,10 @@ class StackingPointSourceInjector(PointSourceInjector):
                 idx = sam_idx[sam_idx["enum"] == enum]["idx"]
                 sam_ev_i = np.copy(self.mc[enum][idx])
                 src_ind = sam_idx[sam_idx["enum"] == enum]["src_idx"]
-                sam_ev[enum] = rotate_struct(sam_ev_i, src_ra[src_ind], self.src_dec[src_ind])
+                sam_ev[enum] = rotate_struct(sam_ev_i, src_ra[src_ind],
+                                             self.src_dec[src_ind])
 
             yield num, sam_ev
-
-
 
 
 class StackingModelInjector(StackingPointSourceInjector):
@@ -845,11 +946,11 @@ class StackingModelInjector(StackingPointSourceInjector):
 
         # Set all other attributes passed to the class
         set_pars(self, **kwargs)
-        
+
         print('Careful: logE and logFlux must be given in log10({0:.0f}TeV)'.format(10**(np.log10(self.GeV)-3)))
         return
-    
-    
+
+
     def fill(self, src_dec, mc, livetime, **kwargs):
         r"""Fill the Injector with MonteCarlo events selecting events around
         the source positions.
@@ -866,12 +967,12 @@ class StackingModelInjector(StackingPointSourceInjector):
         """
         kwargs.setdefault('model', True)
         super(StackingModelInjector, self).fill(src_dec, mc, livetime, **kwargs)
-        
+
         #parameters of the distribution depending on each specific source
         dE = kwargs.pop('dE',np.zeros_like(src_dec,dtype=np.float))
         amp = kwargs.pop('amplitude',np.ones_like(src_dec,dtype=np.float))
         assert(len(src_dec) == len(dE) == len(amp))
-        
+
         ow = np.empty(0,dtype=float)
         for key, mc_i in self.mc.iteritems():
                 mask = self.mc_arr['enum']==key
@@ -905,7 +1006,7 @@ class StackingModelInjector(StackingPointSourceInjector):
         return
 
 
-    
+
     def flux2mu(self, flux):
         r"""Convert a flux to number of expected events.
 
@@ -919,5 +1020,3 @@ class StackingModelInjector(StackingPointSourceInjector):
         """
 
         return float(mu) / self._raw_flux
-
-
