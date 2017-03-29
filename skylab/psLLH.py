@@ -2228,9 +2228,7 @@ class StackingPointSourceLLH(PointSourceLLH):
             # src dec band
             exp_mask = sps.csr_matrix(
                 ((self._ev["sinDec"] > np.sin(min_dec)[:, np.newaxis]) &
-                 (self._ev["sinDec"] < np.sin(max_dec)[:, np.newaxis])) |
-                (self._ev['sigma'] >
-                    (np.ones_like(src_dec) * np.radians(3.))[:, np.newaxis]))
+                 (self._ev["sinDec"] < np.sin(max_dec)[:, np.newaxis])))
 
             mask = exp_mask.getnnz(axis=0) > 0
             exp_mask = exp_mask.transpose()[mask].transpose()
