@@ -41,6 +41,10 @@ import scipy.stats
 from scipy.signal import convolve2d
 import scipy.sparse as sps
 
+# healpy imports for stacking with source prior
+import healpy as hp
+import anapymods.healpy as amp_hp
+
 # local package imports
 from . import set_pars
 from . import ps_model
@@ -2460,6 +2464,127 @@ class StackingPointSourceLLH(PointSourceLLH):
         grad = 2. * grad
 
         return LogLambda, grad
+
+    def fit_source_loc(self, src_ra, src_dec, src_priors, seed, **kwargs):
+        """
+        Fit the location of sources too by using spatial prior information.
+
+        Parameters
+        ----------
+        src_ra, src_dec : array_like
+            Initial seed source position(s).
+
+        src_priors : array
+            2D array with shape (number of srcs, healpy prior map length).
+            Prior maps must be valid healpy maps with the same length.
+
+        seed : dictionary
+            Seed for other fit params in self.params
+
+        Returns
+        -------
+        fmin : float
+            Minimal function value turned into test statistic
+            -sign(ns)*logLambda
+        xmin : dict
+            Parameters minimising the likelihood ratio.
+
+        Other parameters
+        ----------------
+        kwargs
+            Parameters passed to the L-BFGS-B minimiser.
+
+        """
+
+        # wrap llh function to work with arrays
+        def _llh(x, *args):
+            """
+            Wrapper around the log-llh function for the minimizer.
+
+            Sets up the correct parameter vales and multiplies by -1 for we are
+            using minimizers.
+
+
+            Parameters
+            ----------
+            x : array-like
+                First nsrc parameters are src ras, following nsrc parameter are
+                src decs. The remaining paramters are in the same order as in
+                self.params.
+
+            Returns
+            -------
+            llh_val : float
+                Value of the negative log-likelihoof function at the current
+                paramter set.
+            """
+            # Check if new source selection has to be done. Minimization of the
+            # src position is done by the _select_event function because the
+            # signal values are recalculated for updated src positions.
+            # x = np.array(x)
+            nsrcs = len(self._src_dec)
+            _src_ra = x[:nsrcs]
+            _src_dec = x[nsrcs:2 * nsrcs]
+
+            # Wrap ra to [0, 2pi] -> useful when no boundary is given due to
+            # periodic conditions
+            # for i, ra in enumerate(src_ra):
+            #     src_ra[i] = ra - np.fmod(ra, 2 * np.pi) * 2 * np.pi
+
+            if (np.any(_src_ra  != self._src_ra) or
+                    np.any(_src_dec != self._src_dec)):
+                self._select_events(_src_ra, _src_dec)
+
+
+            # For the actual llh function only input remaining params
+            x = x[:2 * nsrcs]
+            fit_pars = dict([(par, xi) for par, xi in zip(self.params, x)])
+
+            fun, grad = self.llh(**fit_pars)
+
+            # Get src prior map values at new src positions
+            src_priors = args[0]
+            NSIDE = hp.get_nside(src_priors[0])
+            theta, phi = amp_hp.DecRaToThetaPhi(_src_dec, _src_ra)
+            idx = hp.ang2pix(NSIDE, theta, phi)
+
+            # Multiply with spatial src prior values to constrain fit
+            src_prior_vals = np.prod(np.diag(src_priors[:, idx]))
+
+            # Return negative value needed for minimization
+            return -fun * src_prior_vals
+
+        if "scramble" in kwargs:
+            raise ValueError("No scrambling of events allowed fit_source_loc")
+        if "approx_grad" in kwargs and not kwargs["approx_grad"]:
+            raise ValueError("Cannot use gradients for location scan")
+
+        kwargs.pop("approx_grad", None)
+
+        kwargs.setdefault("pgtol", _pgtol)
+
+        loc_bound = [[max(0., src_ra - size / np.cos(src_dec)),
+                      min(2. * np.pi, src_ra + size / np.cos(src_dec))],
+                     [src_dec - size, src_dec + size]]
+        pars = [src_ra, src_dec] + [seed[par] for par in self.params]
+        bounds = np.vstack([loc_bound, self.par_bounds])
+
+        xmin, fmin, min_dict = scipy.optimize.fmin_l_bfgs_b(
+                                _llh, pars, bounds=bounds,
+                                approx_grad=True, **kwargs)
+
+        if self._N > 0 and abs(xmin[0]) > _rho_max * self._n:
+            logger.error(("nsources > {0:7.2%} * {1:6d} selected events, "
+                          "fit-value nsources = {2:8.1f}").format(
+                              _rho_max, self._n, xmin[0]))
+
+        xmin = dict([("ra", xmin[0]), ("dec", xmin[1])]
+                    + [(par, xi) for par, xi in zip(self.params, xmin[2:])])
+
+        # Separate over and underfluctuations
+        fmin *= -np.sign(xmin["nsources"])
+
+        return fmin, xmin
 
     def weighted_sensitivity(self, src_ra, src_dec, alpha, beta, inj, mc, **kwargs):
         r"""
