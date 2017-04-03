@@ -314,11 +314,18 @@ class ClassicLLH(NullModel):
 
         """
 
-        if (np.sin(dec) < self.sinDec_bins[0]
-                or np.sin(dec) > self.sinDec_bins[-1]):
-            return 0., None
+        # if (np.sin(dec) < self.sinDec_bins[0]
+        #         or np.sin(dec) > self.sinDec_bins[-1]):
+        #     return 0., None
 
-        return self._spl_effA(np.sin(dec)), None
+        sinDec = np.sin(np.atleast_1d(dec))
+
+        valid = ((sinDec >= self.sinDec_bins[0]) &
+                 (sinDec <= self.sinDec_bins[-1]))
+        effA = np.zeros_like(sinDec)
+        effA = self._spl_effA(sinDec[valid])
+
+        return effA, None
 
     def reset(self):
         r"""Classic likelihood does only depend on spatial part, needs no
@@ -382,7 +389,7 @@ class ClassicLLH(NullModel):
 
         """
 
-        
+
 
         #convert src_ra, dec to numpy arrays if not already done
         src_ra = np.atleast_1d(src_ra)[:,np.newaxis]
@@ -630,7 +637,7 @@ class WeightLLH(ClassicLLH):
 
         mcvars = [mc[p] if not p == "sinDec" else np.sin(mc["trueDec"])
                   for p in self.hist_pars]
-        
+
         par_grid = dict()
         for par, val in self.params.iteritems():
             # create grid of all values that could come up due to boundaries
@@ -675,10 +682,10 @@ class WeightLLH(ClassicLLH):
 
                 ratio[:,:,j] = r
                 w[:,:,j] = w_i
-                
+
 
                 if (gamma > 1.95) and (gamma < 2.05):
-                    import matplotlib.pylab as plt 
+                    import matplotlib.pylab as plt
                     from matplotlib.colors import LogNorm
                     fig,ax = plt.subplots()
                     #print(r)
@@ -740,16 +747,16 @@ class WeightLLH(ClassicLLH):
         w = np.ones_like(r)
 
         self._photospline = glam.fit(np.log(r),w_i,binmids,knots,order,smooth,penalties={3:[1,1]})
-        
+
 
 
         return
 
-    
-    
-    
-    
-    
+
+
+
+
+
     def _ratio_spline(self, mc, **params):
         r"""Create the ratio of signal over background probabilities. With same
         binning, the bin hypervolume cancels out, ensuring correct
@@ -772,7 +779,7 @@ class WeightLLH(ClassicLLH):
         mcvars = [mc[p] if not p == "sinDec" else np.sin(mc["trueDec"])
                   for p in self.hist_pars]
 
-        
+
         # create MC histogram
         wSh, wSb = self._hist(mcvars, weights=self._get_weights(mc, **params))
         wSh = kernel_func(wSh, self._XX)
@@ -795,9 +802,9 @@ class WeightLLH(ClassicLLH):
 
         '''
         if (params['gamma'] > 1.95) and (params['gamma'] < 2.05):
-                    import matplotlib.pylab as plt 
+                    import matplotlib.pylab as plt
                     fig,ax = plt.subplots()
-                    
+
                     X, Y = np.meshgrid(wSb[0][1:], wSb[1][1:],indexing='ij')
                     #print(X.shape,Y.shape,r.shape)
                     ax.pcolormesh(Y, X, ratio,cmap=plt.cm.RdBu_r)
@@ -862,8 +869,8 @@ class WeightLLH(ClassicLLH):
         self._w_cache = _parab_cache
 
         return
-    
-    
+
+
     def weight_new(self, ev, **params):
         r"""Evaluate spline for given parameters.
 
@@ -889,7 +896,7 @@ class WeightLLH(ClassicLLH):
 
         coords = np.array([ev[p] if not p == "trueDec" else ev["sinDec"]
                   for p in self.hist_pars]).T
-       
+
         #print(coords)
         #print([np.append(coord, gamma)[:,np.newaxis] for coord in coords][0:100])
         #print(glam.grideval(self._photospline, [[2],[0.5],[2]]))
@@ -897,7 +904,7 @@ class WeightLLH(ClassicLLH):
         val = [glam.grideval(self._photospline, coord[:,np.newaxis]).ravel()[0] for coord in coords]
 
 
-      
+
         return np.exp(val)
 
 
