@@ -1174,21 +1174,21 @@ class PointSourceLLH(object):
 
             fun, grad = self.llh(**fit_pars)
 
-            #print(x,-fun, -grad)
+            # print(fit_pars, -fun, -grad)
 
             # return negative value needed for minimization
-            return -fun, -grad
+            return -fun, -grad[:1]
 
         scramble = kwargs.pop("scramble", False)
         inject = kwargs.pop("inject", None)
         kwargs.setdefault("pgtol", _pgtol)
-        stacking = kwargs.pop('stacking', False)
+        # stacking = kwargs.pop('stacking', False)
         # Optional theoretical weight from the catalog
         self._w_theo = kwargs.pop('w_theo', np.ones_like(src_dec,dtype=float))
 
         # Set all weights once for this src location,(in case of source stacking this is already done)
-        if not stacking:
-            self._select_events(src_ra, src_dec, inject=inject, scramble=scramble, w_theo=self._w_theo)
+        # if not stacking:
+        self._select_events(src_ra, src_dec, inject=inject, scramble=scramble, w_theo=self._w_theo)
 
         if self._N < 1:
             # No events selected
@@ -1200,15 +1200,13 @@ class PointSourceLLH(object):
 
         inds = [i for i, par in enumerate(self.params) if par in kwargs]
         pars[inds] = np.array([kwargs.pop(par) for par in self.params
-                                               if par in kwargs])
+                               if par in kwargs])
 
         # minimizer setup
         xmin, fmin, min_dict = scipy.optimize.fmin_l_bfgs_b(
-                                _llh, pars,
-                                bounds=self.par_bounds,
-                                **kwargs)
+            _llh, pars, bounds=self.par_bounds, **kwargs)
 
-        #print('gradient:', min_dict)
+        # print('gradient:', min_dict)
         # set up mindict to enter while, exit if fit looks nice
         i = 1
         while min_dict["warnflag"] == 2 and "FACTR" in min_dict["task"]:
@@ -2175,7 +2173,8 @@ class StackingPointSourceLLH(PointSourceLLH):
         scramble = kwargs.pop("scramble", False)
         inject = kwargs.pop("inject", None)
         # Optional theoretical source weight from the catalog
-        self._w_theo = kwargs.pop('w_theo', np.ones_like(src_dec, dtype=float))
+        self._w_theo = kwargs.pop('w_theo',
+            np.atleast_1d(np.ones_like(src_dec, dtype=float)))
 
         if kwargs:
             raise ValueError("Don't know arguments", kwargs.keys())
@@ -2381,12 +2380,15 @@ class StackingPointSourceLLH(PointSourceLLH):
             logger.error('Only one source hypothesis used, switch to PointSourceLLH class!')
 
         # Load relative source weights
-        src_w, src_w_grad = self.llh_model.effA(
-            dec=self._src_dec, **fit_pars)
+        src_w, src_w_grad = self.llh_model.effA(dec=self._src_dec, **fit_pars)
         # ---->total source weight
         norm = np.inner(src_w, self._w_theo)
         w_tot = (src_w * self._w_theo) / norm
-        w_tot_grad = (src_w_grad['gamma'] * self._w_theo) / norm
+        # If Classic model no effA gradient in gamma direction
+        if src_w_grad is None:
+            w_tot_grad = np.zeros_like(self._w_theo)
+        else:
+            w_tot_grad = (src_w_grad['gamma'] * self._w_theo) / norm
 
         # SoB = np.tensordot(self._ev_S, w_tot, axes=(0,0))
         SoB = self._ev_S.transpose().dot(w_tot)
@@ -2442,13 +2444,14 @@ class StackingPointSourceLLH(PointSourceLLH):
             par_grad = par_grad.sum(axis=-1)
 
         else:
-            par_grad = 1./N * (w * grad_S)
-            par_grad[:, xmask] *= nsources / (1. + alpha[xmask])
-            par_grad[:, ~xmask] *= (nsources / (1. + aval) +
+            #
+            par_grad = 1. / N * (w * grad_S)
+            par_grad[xmask] *= nsources / (1. + alpha[xmask])
+            par_grad[~xmask] *= (nsources / (1. + aval) +
                                     nsources * (alpha[~xmask] - aval) /
                                     (1. + aval)**2)
 
-            par_grad = par_grad.sum(axis=-1)
+            par_grad = par_grad.sum()
 
         grad = np.append(ns_grad, par_grad)
 
