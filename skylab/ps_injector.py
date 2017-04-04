@@ -645,15 +645,6 @@ class StackingPointSourceInjector(PointSourceInjector):
             2D array with shape (number of srcs, healpy prior map length).
             Prior maps must be valid healpy maps with the same length.
         """
-        # For external use, make sure 'sinDec' is in the data
-        for key in mc.iterkeys():
-            print("Sample {}: {} events with livetime {} d.".format(
-                key, len(mc[key]), livetime[key]))
-            if "sinDec" not in mc[key].dtype.fields:
-                mc[key] = np.lib.recfunctions.append_fields(
-                    mc[key], "sinDec", np.sin(mc[key]["dec"]),
-                    dtypes=np.float, usemask=False)
-
         # This is 1:1 from the original fill.
         if isinstance(mc, dict) ^ isinstance(livetime, dict):
             raise ValueError("mc and livetime not compatible")
@@ -673,6 +664,15 @@ class StackingPointSourceInjector(PointSourceInjector):
         if not isinstance(mc, dict):
             mc = {-1: mc}
             livetime = {-1: livetime}
+
+        # For external use, make sure 'sinDec' is in the data
+        for key in mc.iterkeys():
+            print("Sample {}: {} events with livetime {} d.".format(
+                key, len(mc[key]), livetime[key]))
+            if "sinDec" not in mc[key].dtype.fields:
+                mc[key] = np.lib.recfunctions.append_fields(
+                    mc[key], "sinDec", np.sin(mc[key]["dec"]),
+                    dtypes=np.float, usemask=False)
 
         self.mc_tot = mc
         self.livetime_tot = livetime
