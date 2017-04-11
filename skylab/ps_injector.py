@@ -102,8 +102,8 @@ def rotate_struct(ev, ra, dec):
     rot["sinDec"] = np.sin(rot_dec)
 
     # "delete" Monte Carlo information from sampled events
-    # mc = ["trueRa", "trueDec", "trueE", "ow"]
-    mc = ["trueE", "ow"]  # Don't drop true dir for testing the sampling
+    # mc = ["trueE", "ow"]  # Don't drop true dir for testing the sampling
+    mc = ["trueRa", "trueDec", "trueE", "ow"]
 
     return drop_fields(rot, mc)
 
