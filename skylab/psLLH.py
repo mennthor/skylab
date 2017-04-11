@@ -403,7 +403,6 @@ class PointSourceLLH(object):
             Events to add to the selected events, fields equal to exp. data.
 
         """
-
         scramble = kwargs.pop("scramble", False)
         inject = kwargs.pop("inject", None)
         if kwargs:
@@ -1077,7 +1076,6 @@ class PointSourceLLH(object):
         grad : array_like
             Gradient at the point.
         """
-
         nsources = fit_pars.pop("nsources")
 
         N = self._N
@@ -1140,7 +1138,7 @@ class PointSourceLLH(object):
         grad = 2. * grad
 
         return LogLambda, grad
-    #@profile
+
     def fit_source(self, src_ra, src_dec, **kwargs):
         """Minimize the negative log-Likelihood at source position(s).
 
@@ -1176,14 +1174,10 @@ class PointSourceLLH(object):
             Returns -logLambda which is the test statistic and should
             be distributed with a chi2 distribution assuming the null
             hypothesis is true.
-
             """
-
             fit_pars = dict([(par, xi) for par, xi in zip(self.params, x)])
 
             fun, grad = self.llh(**fit_pars)
-
-            # print(fit_pars, -fun, -grad)
 
             # return negative value needed for minimization
             return -fun, -grad[:1]
@@ -1191,13 +1185,18 @@ class PointSourceLLH(object):
         scramble = kwargs.pop("scramble", False)
         inject = kwargs.pop("inject", None)
         kwargs.setdefault("pgtol", _pgtol)
-        # stacking = kwargs.pop('stacking', False)
-        # Optional theoretical weight from the catalog
-        self._w_theo = kwargs.pop('w_theo', np.ones_like(src_dec,dtype=float))
 
-        # Set all weights once for this src location,(in case of source stacking this is already done)
-        # if not stacking:
-        self._select_events(src_ra, src_dec, inject=inject, scramble=scramble, w_theo=self._w_theo)
+        # For stacking _select_events need to be called differently
+        stacking = kwargs.pop('stacking', False)
+        if stacking:
+            # Optional theoretical weight from the catalog only for stacking
+            self._w_theo = kwargs.pop('w_theo',
+                                      np.ones_like(src_dec, dtype=float))
+            self._select_events(src_ra, src_dec, inject=inject,
+                                scramble=scramble, w_theo=self._w_theo)
+        else:
+            self._select_events(src_ra, src_dec, inject=inject,
+                                scramble=scramble)
 
         if self._N < 1:
             # No events selected
