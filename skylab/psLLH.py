@@ -1389,8 +1389,9 @@ class PointSourceLLH(object):
             src_dec = x[1]
 
             # Check if new source selection has to be done
+            inject = args[0]
             if not (src_ra == self._src_ra and src_dec == self._src_dec):
-                self._select_events(src_ra, src_dec)
+                self._select_events(src_ra, src_dec, inject=inject)
 
             # Forget about source position
             x = x[2:]
@@ -1400,17 +1401,16 @@ class PointSourceLLH(object):
             fun, grad = self.llh(**fit_pars)
 
             # Get src prior map value at new src position
-            src_prior = args[0]
-            NSIDE = args[1]
+            src_prior = args[1]
+            NSIDE = args[2]
             theta, phi = amp_hp.DecRaToThetaPhi(src_dec, src_ra)
             idx = hp.ang2pix(NSIDE, theta, phi)
 
-            # Get src prior values as log-pdf because we have a log-llh
+            # Get src prior values as log-pdf because we have a log-likelihood
             log_src_prior_val = np.log(src_prior[idx])
             f = fun + log_src_prior_val
 
             # Return negative value needed for minimization
-            # #### DONT FORGET TO CHANGE BACK
             return -f
 
         if "scramble" in kwargs:
@@ -1420,25 +1420,14 @@ class PointSourceLLH(object):
 
         kwargs.pop("approx_grad", None)
         kwargs.setdefault("pgtol", _pgtol)
+        inject = kwargs.pop("inject", None)
 
         pars = [src_ra, src_dec] + [seed[par] for par in self.params]
         # Only non src location parameters have bounds
-        bounds = np.vstack([[[None, None], [None, None]], self.par_bounds])
+        bounds = np.vstack([[[0, 2 * np.pi                                                              ], [None, None]], self.par_bounds])
 
         # Pass src_prior as argument
-        args = (src_prior, hp.get_nside(src_prior))
-
-        # import emcee
-        # nwalker = 12
-        # sampler = emcee.EnsembleSampler(
-        #     nwalkers=nwalker, dim=3, lnpostfn=_llh, args=args)
-        # pos0 = np.array(
-        #     [np.random.uniform(0.99 * src_ra, 1.01 * src_ra, nwalker),
-        #      np.random.uniform(0.99 * src_dec, 1.01 * src_dec, nwalker),
-        #      np.random.uniform(0.99 * 15, 1.01 * 15, nwalker),
-        #      ]).T
-        # sampler.run_mcmc(pos0, kwargs.pop("nsamples", 1000))
-        # return sampler.flatchain
+        args = (inject, src_prior, hp.get_nside(src_prior))
 
         xmin, fmin, min_dict = scipy.optimize.fmin_l_bfgs_b(
             _llh, pars, args=args, bounds=bounds, approx_grad=True, **kwargs)
