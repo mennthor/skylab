@@ -1343,22 +1343,6 @@ class PointSourceLLH(object):
 
         return fmin, xmin
 
-    def reset(self):
-        r"""Reset all cached values.
-
-        """
-        self._N = _n
-
-        self._src_ra = _src_ra
-        self._src_dec = _src_dec
-
-        self._ev = _ev
-        self._ev_S = _ev_S
-
-        self.llh_model.reset()
-
-        return
-
     def fit_source_loc_prior(self, src_ra, src_dec, src_prior, seed, **kwargs):
         """
         Fit the location of a source too by using spatial prior information.
@@ -1471,6 +1455,22 @@ class PointSourceLLH(object):
         fmin *= -np.sign(xmin["nsources"])
 
         return fmin, xmin
+
+    def reset(self):
+        r"""Reset all cached values.
+
+        """
+        self._N = _n
+
+        self._src_ra = _src_ra
+        self._src_dec = _src_dec
+
+        self._ev = _ev
+        self._ev_S = _ev_S
+
+        self.llh_model.reset()
+
+        return
 
     def weighted_sensitivity(self, src_ra, src_dec, alpha, beta, inj, mc, **kwargs):
         """Calculate the point source sensitivity for a given source
