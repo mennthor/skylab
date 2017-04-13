@@ -1395,7 +1395,6 @@ class PointSourceLLH(object):
 
             # Forget about source position
             x = x[2:]
-
             fit_pars = dict([(par, xi) for par, xi in zip(self.params, x)])
 
             fun, grad = self.llh(**fit_pars)
@@ -1423,10 +1422,14 @@ class PointSourceLLH(object):
         inject = kwargs.pop("inject", None)
 
         pars = [src_ra, src_dec] + [seed[par] for par in self.params]
-        # Only non src location parameters have bounds
-        bounds = np.vstack([[[0, 2 * np.pi                                                              ], [None, None]], self.par_bounds])
+        # Src location needs to be bounded to skymap, the rest is done with
+        # prior map
+        bounds = np.vstack([[[0, 2 * np.pi], [-np.pi / 2., np.pi / 2.]],
+                            self.par_bounds])
 
-        # Pass src_prior as argument
+        # Make sure that prior is a pdf and log prior is small but not -inf
+        # Assign the smallest python float value (~2.2e-308 -> log of ~708.3)
+        src_prior[src_prior <= 0] = sys.float_info.min
         args = (inject, src_prior, hp.get_nside(src_prior))
 
         xmin, fmin, min_dict = scipy.optimize.fmin_l_bfgs_b(
