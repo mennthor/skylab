@@ -1424,7 +1424,8 @@ class PointSourceLLH(object):
         pars = [src_ra, src_dec] + [seed[par] for par in self.params]
         # Src location needs to be bounded to skymap, the rest is done with
         # prior map
-        bounds = np.vstack([[[0, 2 * np.pi], [-np.pi / 2., np.pi / 2.]],
+        bounds = np.vstack([[[0.01, 0.99 * 2 * np.pi],
+                             [-0.95 * np.pi / 2., 0.95 * np.pi / 2.]],
                             self.par_bounds])
 
         # Make sure that prior is a pdf and log prior is small but not -inf
@@ -1439,6 +1440,102 @@ class PointSourceLLH(object):
             logger.error(("nsources > {0:7.2%} * {1:6d} selected events, "
                           "fit-value nsources = {2:8.1f}").format(
                               _rho_max, self._n, xmin[0]))
+
+        xmin = dict([("ra", xmin[0]), ("dec", xmin[1])] +
+                    [(par, xi) for par, xi in zip(self.params, xmin[2:])])
+
+        # Separate over and underfluctuations
+        fmin *= -np.sign(xmin["nsources"])
+
+        return fmin, xmin
+
+    def fit_source_loc_prior2(self, src_ra, src_dec, src_prior, seed, **kwargs):
+        """
+        src_ra, src_dec : seed (eg. beft fit from prior map). float
+        src_prior: healpy prior map. 1D array
+        seed: seed for other parameters, eg. nsources. dict
+        nwalkers, n_samples: how many walkers per dim and how many samples per
+                             walker
+        """
+        def _llh(x, *args):
+            """
+            Wrapper around the log-llh function for the minimizer. Using emcee.
+
+            x = src_ra, src_dec, nsources
+            args = inject, bounds, prior_maps, NSIDE
+            """
+            bounds = args[1]
+            for xi, (bi_low, bi_hig) in zip(x, bounds):
+                if (xi < bi_low) or (xi > bi_hig):
+                    return -np.inf
+
+            # Check if new source selection has to be done
+            inject = args[0]
+            src_ra = x[0]
+            src_dec = x[1]
+            if not (src_ra == self._src_ra and src_dec == self._src_dec):
+                self._select_events(src_ra, src_dec, inject=inject)
+
+            # Forget about source position and get lnLLH dependent on other x
+            x = x[2:]
+            fit_pars = dict([(par, xi) for par, xi in zip(self.params, x)])
+            fun, grad = self.llh(**fit_pars)
+
+            # Get src prior map value at new src position
+            src_prior = args[2]
+            NSIDE = args[3]
+            theta, phi = amp_hp.DecRaToThetaPhi(src_dec, src_ra)
+            idx = hp.ang2pix(NSIDE, theta, phi)
+
+            # Get src prior values as log-pdf because we have a log-likelihood
+            log_src_prior_val = np.log(src_prior[idx])
+
+            return fun + log_src_prior_val
+
+        if "scramble" in kwargs:
+            raise ValueError("No scrambling of events allowed fit_source_loc")
+        if "approx_grad" in kwargs and not kwargs["approx_grad"]:
+            raise ValueError("Cannot use gradients for location scan")
+
+        import emcee
+        kwargs.pop("approx_grad", None)
+        kwargs.setdefault("pgtol", _pgtol)
+        inject = kwargs.pop("inject", None)
+
+        # Src location needs to be bounded to skymap, the rest is done with
+        # prior map
+        bounds = np.vstack([[[0.01, 0.99 * 2 * np.pi],
+                             [-0.95 * np.pi / 2., 0.95 * np.pi / 2.]],
+                            self.par_bounds])
+
+        # Make emcee sampler, nwalkers per dim
+        ndim = len(bounds)
+        nwalkers = kwargs.pop("nwalkers", 10) * ndim
+        NSIDE = hp.get_nside(src_prior)
+        args = (inject, bounds, src_prior, NSIDE)
+        sampler = emcee.EnsembleSampler(nwalkers, ndim, _llh, args=args)
+
+        # Start positions are choosen from the prior map & uniform for others
+        theta, phi = amp_hp.healpy_rejection_sampler(src_prior, nwalkers)
+        dec0, ra0 = amp_hp.ThetaPhiToDecRa(theta, phi)
+        ns0 = np.random.uniform(0.9, 1.1, size=nwalkers) * seed["nsources"]
+        p0 = np.vstack((ra0, dec0, ns0)).T
+        n_samples = kwargs.pop("n_samples", 100)  # per Walker
+        sampler.run_mcmc(p0, n_samples)
+
+        # Get minimum
+        self.p0 = p0
+        self.sampler = sampler
+        minidx = np.argmax(sampler.flatlnprobability)
+        xmin = sampler.flatchain[minidx]
+        fmin = sampler.flatlnprobability[minidx]
+
+        # Now run a normal minimizer on the median of the samples as a seed
+        # seed = np.median(sampler.flatchain, axis=0)
+        # seed = xmin
+        # print("Minimizer seed:\n", seed)
+        # xmin, fmin, min_dict = scipy.optimize.fmin_l_bfgs_b(
+        #     _llh, seed, args=args, bounds=bounds, approx_grad=True, **kwargs)
 
         xmin = dict([("ra", xmin[0]), ("dec", xmin[1])] +
                     [(par, xi) for par, xi in zip(self.params, xmin[2:])])
